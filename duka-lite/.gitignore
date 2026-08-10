@@ -32,8 +32,12 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-# ...except the template, which documents what a deployment needs.
+# ...except the template, and .env.local itself: this repo is PRIVATE and both
+# values are NEXT_PUBLIC_ (shipped to every browser that loads the app), so
+# tracking them keeps a fresh clone working. If this repo is ever made public,
+# delete the .env.local exception and rotate the key from Supabase.
 !.env.example
+!.env.local
 
 # vercel
 .vercel

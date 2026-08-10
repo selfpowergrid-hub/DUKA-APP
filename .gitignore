@@ -5,10 +5,13 @@ out/
 build/
 *.tsbuildinfo
 
-# Environment — never commit real keys. The example file IS committed.
+# Environment. duka-lite/.env.local is deliberately tracked — see the note in
+# duka-lite/.gitignore. Anything else matching stays out; a service_role key
+# must never be committed, since it bypasses Row Level Security entirely.
 .env
 .env.*
 !.env.example
+!duka-lite/.env.local
 
 # Generated at build time by scripts/build-sw.mjs (stamped with a timestamp)
 duka-lite/public/sw.js
