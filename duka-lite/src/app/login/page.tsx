@@ -1,0 +1,78 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { signIn } from "@/lib/auth";
+import { useSession } from "@/components/session-provider";
+import { Button, Field, Input, Notice, Spinner } from "@/components/ui";
+
+export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const { refresh } = useSession();
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await signIn(email, password);
+      await refresh();
+      router.replace("/sell");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign in failed");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center gap-6 p-5 sm:max-w-lg lg:justify-center">
+      <div>
+        <h1 className="text-3xl font-bold lg:text-4xl">Duka Lite</h1>
+        <p className="mt-1 text-muted">Sign in to your shop</p>
+      </div>
+
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        <Field label="Email">
+          <Input
+            type="email"
+            inputMode="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </Field>
+
+        <Field label="Password">
+          <Input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </Field>
+
+        {error && <Notice>{error}</Notice>}
+
+        <Button type="submit" size="lg" disabled={busy}>
+          {busy ? <Spinner /> : "Sign in"}
+        </Button>
+      </form>
+
+      <p className="text-sm text-muted">
+        The first sign-in on a phone needs internet. After that the app works with no
+        connection at all.
+      </p>
+
+      <Link href="/signup" className="flex min-h-12 items-center text-base font-semibold underline">
+        New shop? Create an owner account
+      </Link>
+    </div>
+  );
+}

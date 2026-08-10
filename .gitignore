@@ -1,0 +1,23 @@
+# Dependencies and build output
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Environment — never commit real keys. The example file IS committed.
+.env
+.env.*
+!.env.example
+
+# Generated at build time by scripts/build-sw.mjs (stamped with a timestamp)
+duka-lite/public/sw.js
+
+# Screenshots written by the responsive check
+duka-lite/test/screenshots/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.pem
+npm-debug.log*

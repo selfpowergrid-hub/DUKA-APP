@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+/*
+ * Duka Lite design tokens.
+ *
+ * Two rules that are not negotiable:
+ *   1. `cash` and `mpesa` are semantic colours. They mean money in the drawer
+ *      and money on the phone, nowhere else, never swapped, never blended.
+ *   2. Nothing interactive is under 48px, nothing readable is under 16px.
+ *      These are shop attendants using thumbs on cracked screens in daylight.
+ *
+ * No dark mode: explicitly out of scope, and a till that changes colour with
+ * the ambient light is a till whose Cash button moved.
+ */
+
+/*
+ * Claude palette — warm ivory ground, slate text, terracotta accent.
+ *
+ * The neutrals and the brand accent come straight from Claude. The money
+ * colours do not, and could not: this app's central rule is that cash and
+ * M-Pesa are never confusable, and a warm monochrome palette cannot carry that
+ * distinction. So the chrome is Claude and the semantics are retuned to sit on
+ * ivory without losing their separation.
+ *
+ * The conflict worth knowing about: Claude's terracotta (#C96442) is a warm
+ * red-orange, and the "Difference" figure on Closing turns red when the drawer
+ * is short. A terracotta primary button beside a red-orange error is exactly
+ * the ambiguity this app cannot afford — so danger moved to a deep claret,
+ * darker and cooler than the accent, and reads as alarm rather than brand.
+ * Every pairing below is contrast-checked by `npm run test:contrast`.
+ */
+@theme {
+  --color-ink: #1f1e1d; /* Claude slate — warm near-black */
+  --color-muted: #63615c;
+  --color-line: #e3dfd4;
+  --color-surface: #ffffff;
+  --color-canvas: #faf9f5; /* Claude ivory */
+  --color-panel: #f0eee6; /* Anthropic ivory medium — rail, insets */
+
+  /* Brand accent — Claude terracotta. Primary actions only. */
+  --color-brand: #b8501f;
+  --color-brand-dark: #96401a;
+  --color-brand-soft: #f6ebe4;
+  --color-brand-bright: #c96442; /* decorative only: indicators, focus */
+
+  /* Cash — green. Physical money. Earthed to sit on ivory. */
+  --color-cash: #1c6b41;
+  --color-cash-dark: #14512f;
+  --color-cash-soft: #e6f0e8;
+
+  /* M-Pesa — blue. The one cool colour, so it can never read as cash. */
+  --color-mpesa: #2a4fb8;
+  --color-mpesa-dark: #1e3a8c;
+  --color-mpesa-soft: #e8ecf8;
+
+  /*
+   * Danger — claret, pushed toward berry on purpose. A plainer red scored
+   * dE 20.5 against the terracotta accent under simulated deuteranopia, which
+   * is too close for the one figure on Closing that says money is missing.
+   * This sits at ~30 and still clears 8.9:1 with white.
+   */
+  --color-danger: #8c1d3f;
+  --color-danger-soft: #f9e8ed;
+  --color-warn: #7a5210;
+  --color-warn-soft: #f5eddc;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* Never let a number wrap or shift as it grows. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    font-size: 12pt;
+  }
+  .print-plain {
+    box-shadow: none !important;
+    border: 1px solid #999 !important;
+  }
+  /*
+   * A printer is wide, so the desktop breakpoints would otherwise apply and a
+   * Closing summary would print in two columns with its M-Pesa list cut off at
+   * a scroll boundary. Collapse to one column and let every code print.
+   */
+  .print-stack {
+    display: block !important;
+  }
+  .print-stack > * + * {
+    margin-top: 1rem;
+  }
+  .print-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  /* The desktop rail is hidden in print, so drop the space reserved for it. */
+  .print-full {
+    padding-left: 0 !important;
+    max-width: none !important;
+  }
+}
