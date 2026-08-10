@@ -205,6 +205,27 @@ export interface ProductImage {
   synced_at: string | null;
 }
 
+/**
+ * A delivery of one product, identified by the number printed on the carton.
+ *
+ * Its remaining quantity is NOT stored here — it is derived by summing the
+ * movements that name it, exactly as `products.quantity` is derived from the
+ * movement ledger. One source of truth, nothing that can desync.
+ */
+export interface ProductBatch {
+  id: string;
+  shop_id: string;
+  product_id: string;
+  /** As printed. Free text, because manufacturers use every format there is. */
+  batch_no: string;
+  /** A date, not a timestamp: cartons print months, not moments. */
+  expiry_date: string;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+  synced_at: string | null;
+}
+
 export interface Staff {
   id: string;
   shop_id: string;
@@ -236,6 +257,14 @@ export interface Product {
   track_stock: boolean;
   /** Clusters sealed pack sizes for display only. Stock stays independent. */
   group_name: string | null;
+  /**
+   * Whether stock of this product is tracked per batch with an expiry date.
+   * Off by default: a chemist also sells cotton wool, and demanding a batch
+   * number for that trains staff to type rubbish into the field that matters.
+   */
+  track_batches: boolean;
+  /** Prescription-only. Warns at the till. */
+  is_pom: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -287,6 +316,12 @@ export interface StockMovement {
   /** What was actually paid, when the invoice gives a total rather than a rate. */
   total_cost: number | null;
   sale_id: string | null;
+  /**
+   * Which batch this movement moved. Null for products that do not track
+   * batches, and for everything recorded before batches existed — backfilling
+   * a guess would be inventing history.
+   */
+  batch_id: string | null;
   note: string | null;
   note_ref: string | null;
   created_at: string;
@@ -352,7 +387,9 @@ export type OutboxKind =
   /** A reversed sale: the refund, its stock movements and any debt reversal. */
   | "refund"
   /** A product photo, or its removal. Never money — safe to overwrite. */
-  | "product_image";
+  | "product_image"
+  /** A batch of stock: its number and, crucially, its expiry date. */
+  | "batch";
 
 /**
  * Outbox kinds that represent money. Discarding one of these means a sale or a

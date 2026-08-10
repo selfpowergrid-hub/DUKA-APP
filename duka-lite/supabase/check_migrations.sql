@@ -135,6 +135,16 @@ with checks as (
      and exists (select 1 from pg_proc p
                    join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname='public' and p.proname='sync_product_image')
+
+  union all
+  select '0012_batches_and_expiry', 'batches, expiry dates, FEFO dispensing',
+         to_regclass('public.product_batches') is not null
+     and exists (select 1 from information_schema.columns
+                  where table_schema='public' and table_name='stock_movements'
+                    and column_name='batch_id')
+     and exists (select 1 from information_schema.columns
+                  where table_schema='public' and table_name='products'
+                    and column_name='track_batches')
 )
 
 select

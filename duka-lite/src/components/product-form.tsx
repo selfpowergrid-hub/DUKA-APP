@@ -32,6 +32,8 @@ export function ProductForm({ product }: { product?: Product }) {
   const [categoryId, setCategoryId] = useState<string>(product?.category_id ?? "");
   const [newCategory, setNewCategory] = useState("");
   const [trackStock, setTrackStock] = useState(product?.track_stock ?? true);
+  const [trackBatches, setTrackBatches] = useState(product?.track_batches ?? false);
+  const [isPom, setIsPom] = useState(product?.is_pom ?? false);
   const [groupName, setGroupName] = useState(product?.group_name ?? "");
   const [newUnit, setNewUnit] = useState("");
   const [newUnitFractional, setNewUnitFractional] = useState(false);
@@ -92,6 +94,9 @@ export function ProductForm({ product }: { product?: Product }) {
         low_stock_threshold: Number(threshold) || 0,
         category_id: finalCategoryId,
         track_stock: trackStock,
+        // Batches are meaningless without a count to attach them to.
+        track_batches: trackStock && trackBatches,
+        is_pom: isPom,
         group_name: groupName.trim() || null,
         portions: portionRows
           .filter((p) => p.name.trim())
@@ -312,33 +317,36 @@ export function ProductForm({ product }: { product?: Product }) {
 
       {/* ------------------------------------------------- stock tracking --- */}
       <div className="rounded-2xl border border-line bg-surface p-4">
-        {/* A real 48px control, not a 28px native checkbox — this is a till
-            operated with thumbs. */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={trackStock}
-          onClick={() => setTrackStock((v) => !v)}
-          className="flex min-h-12 w-full items-center justify-between gap-3 text-left"
-        >
-          <span>
-            <span className="block font-semibold">Track stock</span>
-            <span className="block text-sm text-muted">
-              Turn off for things with no count — airtime, a carrier bag.
-            </span>
-          </span>
-          <span
-            className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
-              trackStock ? "bg-brand" : "bg-line"
-            }`}
-          >
-            <span
-              className={`absolute top-1 h-6 w-6 rounded-full bg-surface transition-all ${
-                trackStock ? "left-7" : "left-1"
-              }`}
+        <Switch
+          checked={trackStock}
+          onChange={() => setTrackStock((v) => !v)}
+          label="Track stock"
+          hint="Turn off for things with no count — airtime, a carrier bag."
+        />
+
+        {/* Batch tracking is opt-in per product, not shop-wide. A chemist also
+            sells cotton wool and razor blades, and demanding a batch number for
+            those trains staff to type rubbish into the one field that has to be
+            trustworthy. */}
+        {trackStock && (
+          <div className="mt-3 border-t border-line pt-3">
+            <Switch
+              checked={trackBatches}
+              onChange={() => setTrackBatches((v) => !v)}
+              label="Track batches and expiry"
+              hint="For medicines and anything that expires. Every delivery then needs a batch number and expiry date, and the oldest-expiring stock is dispensed first."
             />
-          </span>
-        </button>
+          </div>
+        )}
+
+        <div className="mt-3 border-t border-line pt-3">
+          <Switch
+            checked={isPom}
+            onChange={() => setIsPom((v) => !v)}
+            label="Prescription only"
+            hint="Warns at the till that this must not be sold over the counter."
+          />
+        </div>
 
         {trackStock && (
           <div className="mt-4 flex flex-col gap-4 border-t border-line pt-4">
@@ -526,5 +534,47 @@ export function ProductForm({ product }: { product?: Product }) {
         </Button>
       )}
     </form>
+  );
+}
+
+/**
+ * A real 48px switch, not a 28px native checkbox — this is a till operated with
+ * thumbs, and the responsive check fails anything under 44px.
+ */
+function Switch({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      className="flex min-h-12 w-full items-center justify-between gap-3 text-left"
+    >
+      <span className="min-w-0">
+        <span className="block font-semibold">{label}</span>
+        <span className="block text-sm text-muted">{hint}</span>
+      </span>
+      <span
+        className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-brand" : "bg-line"
+        }`}
+      >
+        <span
+          className={`absolute top-1 h-6 w-6 rounded-full bg-surface transition-all ${
+            checked ? "left-7" : "left-1"
+          }`}
+        />
+      </span>
+    </button>
   );
 }

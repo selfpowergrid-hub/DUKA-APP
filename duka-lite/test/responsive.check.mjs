@@ -267,6 +267,7 @@ for (const vp of VIEWPORTS) {
     "/products/adjust",
     "/products/history",
     "/products/restock",
+    "/products/expiry",
     "/settings",
   ]) {
     await page.goto(`${BASE}${route}`, { waitUntil: "networkidle" });

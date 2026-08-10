@@ -144,6 +144,8 @@ export function describeEntry(entry: OutboxEntry): string {
     }
     case "product_image":
       return p.data ? "A product photo" : "A removed product photo";
+    case "batch":
+      return `Batch ${String(p.batch_no ?? "")} expiring ${String(p.expiry_date ?? "")}`;
   }
 }
 
@@ -319,6 +321,11 @@ async function pushEntry(entry: OutboxEntry): Promise<void> {
       if (error) throw new Error(error.message);
       return;
     }
+    case "batch": {
+      const { error } = await sb.rpc("sync_batch", { p_batch: payload });
+      if (error) throw new Error(error.message);
+      return;
+    }
     case "refund": {
       const body = payload as { refund: unknown; movements: unknown };
       const { error } = await sb.rpc("sync_refund", {
@@ -439,7 +446,7 @@ async function pullReferenceData(session: Session) {
   // were discarded for that whole cycle for no reason. Now one query failing
   // never costs the others anything, and the till does not depend on any of
   // this succeeding at all.
-  const [cats, units, portions, staff, customers, shop] = await Promise.allSettled([
+  const [cats, units, portions, staff, customers, shop, batches] = await Promise.allSettled([
     sb.from("categories").select("*").eq("shop_id", session.shop_id),
     sb.from("units").select("*").eq("shop_id", session.shop_id),
     sb.from("product_portions").select("*").eq("shop_id", session.shop_id),
@@ -451,6 +458,10 @@ async function pullReferenceData(session: Session) {
     // not had the 0008 migration applied yet would get a 400 for an unknown
     // column, and no optional setting is worth a failed sync cycle.
     sb.from("shops").select("*").eq("id", session.shop_id).maybeSingle(),
+    // Batches ride with the catalogue rather than with activity: a batch is
+    // part of what a product IS, and the till cannot dispense safely without
+    // knowing what expires when.
+    sb.from("product_batches").select("*").eq("shop_id", session.shop_id),
   ]);
 
   // Seed the reminder wording ONLY when this device has none. The local copy
@@ -471,6 +482,15 @@ async function pullReferenceData(session: Session) {
   }
   if (customers.status === "fulfilled" && customers.value.data?.length) {
     await db.customers.bulkPut(customers.value.data as never);
+  }
+  if (batches.status === "fulfilled" && !batches.value.error) {
+    const pendingBatchIds = new Set(
+      (await db.outbox.where("kind").equals("batch").toArray()).map((e) => e.entity_id),
+    );
+    const rows = ((batches.value.data ?? []) as Array<Record<string, unknown>>).filter(
+      (b) => !pendingBatchIds.has(b.id as string),
+    );
+    if (rows.length) await db.product_batches.bulkPut(rows as never);
   }
   if (cats.status === "fulfilled" && cats.value.data?.length) {
     await db.categories.bulkPut(cats.value.data as never);

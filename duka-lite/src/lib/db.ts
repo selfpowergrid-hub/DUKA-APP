@@ -8,6 +8,7 @@ import type {
   DebtEntry,
   DebtReminder,
   DiscardedEntry,
+  ProductBatch,
   ProductImage,
   Refund,
   OutboxEntry,
@@ -39,6 +40,7 @@ export class DukaDB extends Dexie {
   debt_reminders!: EntityTable<DebtReminder, "id">;
   refunds!: EntityTable<Refund, "id">;
   product_images!: EntityTable<ProductImage, "product_id">;
+  product_batches!: EntityTable<ProductBatch, "id">;
   discarded!: EntityTable<DiscardedEntry, "id">;
   outbox!: EntityTable<OutboxEntry, "seq">;
   meta!: EntityTable<{ key: string; value: unknown }, "key">;
@@ -117,6 +119,13 @@ export class DukaDB extends Dexie {
     this.version(8).stores({
       product_images: "product_id, shop_id, updated_at",
     });
+
+    // v9 — batches and expiry. `[product_id+batch_no]` is what makes the same
+    // delivery recorded twice collapse to one batch instead of splitting its
+    // quantity in half and hiding some of it from the expiry report.
+    this.version(9).stores({
+      product_batches: "id, product_id, expiry_date, updated_at, [product_id+batch_no]",
+    });
   }
 }
 
@@ -164,6 +173,7 @@ export async function clearLocalData(): Promise<void> {
       db.debt_reminders,
       db.refunds,
       db.product_images,
+      db.product_batches,
       db.discarded,
       db.outbox,
       db.meta,
@@ -184,6 +194,7 @@ export async function clearLocalData(): Promise<void> {
         db.debt_reminders.clear(),
         db.refunds.clear(),
         db.product_images.clear(),
+        db.product_batches.clear(),
         db.discarded.clear(),
         db.outbox.clear(),
         db.meta.clear(),

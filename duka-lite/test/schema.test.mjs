@@ -32,6 +32,7 @@ const MIGRATIONS = [
   "0009b_refunds.sql",
   "0010_optional_mpesa_code.sql",
   "0011_product_images.sql",
+  "0012_batches_and_expiry.sql",
 ];
 
 const db = new PGlite();
@@ -1276,6 +1277,168 @@ try {
 }
 await db.exec("reset role;");
 expect("a photo cannot be attached to another shop's product", crossShop);
+
+// =========================================================================
+// 0012 — batches and expiry
+// =========================================================================
+const batchProd = (
+  await q(
+    `insert into public.products (shop_id, name, unit, buying_price, selling_price, track_batches)
+     values ($1,'Amoxil 500mg','pc',10,20,true) returning id`,
+    [shop],
+  )
+).rows[0].id;
+
+const batchA = "0c12ba7c-0000-4000-8000-000000000001";
+const callBatch = (id, no, expiry, updated) =>
+  as(owner, () =>
+    q("select public.sync_batch($1::jsonb) as id", [
+      JSON.stringify({
+        id,
+        product_id: batchProd,
+        batch_no: no,
+        expiry_date: expiry,
+        created_at: new Date().toISOString(),
+        updated_at: updated ?? new Date().toISOString(),
+      }),
+    ]),
+  );
+
+await callBatch(batchA, "AMX-001", "2030-06-30");
+await db.exec("reset role;");
+expect(
+  "a batch is registered",
+  Number((await q("select count(*) c from public.product_batches where id=$1", [batchA]))
+    .rows[0].c) === 1,
+);
+
+// The same delivery recorded twice on two offline devices must collapse to ONE
+// batch. Two rows would split the quantity and let half of it hide from the
+// expiry report — which is the report the whole feature exists to produce.
+const dupe = await callBatch(
+  "0c12ba7c-0000-4000-8000-000000000002",
+  "AMX-001",
+  "2030-06-30",
+);
+await db.exec("reset role;");
+expect(
+  "the same batch number collapses to one batch, not two",
+  dupe.rows[0].id === batchA &&
+    Number((await q("select count(*) c from public.product_batches where product_id=$1", [batchProd]))
+      .rows[0].c) === 1,
+  dupe.rows[0].id,
+);
+
+// A mistyped expiry must be correctable — a wrong date is more dangerous than
+// no date, because it will be trusted.
+await callBatch(batchA, "AMX-001", "2031-01-31", new Date(Date.now() + 1000).toISOString());
+await db.exec("reset role;");
+expect(
+  "an expiry date can be corrected",
+  (await q("select expiry_date from public.product_batches where id=$1", [batchA]))
+    .rows[0].expiry_date.toISOString().slice(0, 10) === "2031-01-31",
+);
+
+// ...but a stale device must not undo the correction.
+await callBatch(batchA, "AMX-001", "2029-01-01", new Date(Date.now() - 86400000).toISOString());
+await db.exec("reset role;");
+expect(
+  "a stale device cannot overwrite a corrected expiry",
+  (await q("select expiry_date from public.product_batches where id=$1", [batchA]))
+    .rows[0].expiry_date.toISOString().slice(0, 10) === "2031-01-31",
+);
+
+let batchCrossShop = false;
+try {
+  await as(other, () =>
+    q("select public.sync_batch($1::jsonb)", [
+      JSON.stringify({
+        id: "0c12ba7c-0000-4000-8000-000000000009",
+        product_id: batchProd,
+        batch_no: "X",
+        expiry_date: "2030-01-01",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    ]),
+  );
+} catch {
+  batchCrossShop = true;
+}
+await db.exec("reset role;");
+expect("a batch cannot be attached to another shop's product", batchCrossShop);
+
+// A movement can name its batch, and the quantity trigger still works.
+await q(
+  `insert into public.stock_movements (id, shop_id, product_id, user_id, delta, reason, buying_price, batch_id, created_at)
+   values (gen_random_uuid(), $1, $2, $3, 60, 'restock', 10, $4, now())`,
+  [shop, batchProd, owner, batchA],
+);
+expect(
+  "a batched restock still updates the product quantity",
+  Number((await q("select quantity from public.products where id=$1", [batchProd])).rows[0].quantity) === 60,
+);
+
+// A batch with movements against it is part of the audit trail.
+await db.exec("set role authenticated;");
+let batchDelete = false;
+try {
+  await as(owner, () => q("delete from public.product_batches where id=$1", [batchA]));
+} catch {
+  batchDelete = true;
+}
+await db.exec("reset role;");
+expect("a batch cannot be deleted", batchDelete);
+
+// A sale spanning two batches is simply two movements through sync_sale.
+const batchB = "0c12ba7c-0000-4000-8000-000000000003";
+await callBatch(batchB, "AMX-002", "2032-01-31");
+await db.exec("reset role;");
+const splitSaleId = "0c12ba7c-0000-4000-8000-000000000010";
+await as(owner, () =>
+  q("select public.sync_sale($1::jsonb, $2::jsonb, $3::jsonb)", [
+    JSON.stringify({
+      id: splitSaleId,
+      total: 200,
+      payment_method: "cash",
+      amount_tendered: 200,
+      business_date: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    }),
+    JSON.stringify([]),
+    JSON.stringify([
+      {
+        id: "0c12ba7c-0000-4000-8000-000000000011",
+        product_id: batchProd,
+        delta: -6,
+        batch_id: batchA,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: "0c12ba7c-0000-4000-8000-000000000012",
+        product_id: batchProd,
+        delta: -4,
+        batch_id: batchB,
+        created_at: new Date().toISOString(),
+      },
+    ]),
+  ]),
+);
+await db.exec("reset role;");
+const splitRows = (
+  await q(
+    `select batch_id, delta from public.stock_movements
+      where sale_id = $1 order by delta`,
+    [splitSaleId],
+  )
+).rows;
+expect(
+  "a sale can span two batches and each movement keeps its own",
+  splitRows.length === 2 &&
+    splitRows.some((r) => r.batch_id === batchA && Number(r.delta) === -6) &&
+    splitRows.some((r) => r.batch_id === batchB && Number(r.delta) === -4),
+  JSON.stringify(splitRows),
+);
 
 // --- weighted-average cost ------------------------------------------------
 // The scenario the old "latest cost" behaviour got wrong: buy cheap, then buy

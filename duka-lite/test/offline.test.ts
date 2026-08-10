@@ -1891,6 +1891,251 @@ async function main() {
 
   expect("byte sizes read in KB for a human", formatBytes(12000) === "11.7 KB", formatBytes(12000));
 
+  // =======================================================================
+  // Batches, expiry and FEFO dispensing
+  // =======================================================================
+  const { saveBatch } = await import("../src/lib/store");
+  const { allocateFefo, batchStock, expiringStock, expiryState, stockOfProduct, salesOfBatch } =
+    await import("../src/lib/batches");
+
+  const day = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+
+  expect("yesterday is expired", expiryState(day(-1)) === "expired");
+  expect("in 10 days is critical", expiryState(day(10)) === "critical");
+  expect("in 60 days is soon", expiryState(day(60)) === "soon");
+  expect("in 200 days is ok", expiryState(day(200)) === "ok");
+
+  const amox = await saveProduct({
+    name: "Amoxil 500mg",
+    unit: "pc",
+    buying_price: 8,
+    selling_price: 15,
+    low_stock_threshold: 20,
+    track_batches: true,
+    is_pom: true,
+    portions: [{ name: "Strip of 10", factor: 10, price: 130 }],
+  });
+
+  // Deliberately received in the WRONG order: the batch that arrives second
+  // expires first. FIFO would dispense the wrong one; FEFO is the whole point.
+  const later = await saveBatch({
+    product_id: amox.id,
+    batch_no: "AMX-LATE",
+    expiry_date: day(400),
+  });
+  await recordMovement({
+    product_id: amox.id,
+    delta: 100,
+    reason: "restock",
+    buying_price: 8,
+    batch_id: later.id,
+  });
+  const sooner = await saveBatch({
+    product_id: amox.id,
+    batch_no: "AMX-SOON",
+    expiry_date: day(45),
+  });
+  await recordMovement({
+    product_id: amox.id,
+    delta: 30,
+    reason: "restock",
+    buying_price: 8,
+    batch_id: sooner.id,
+  });
+
+  const shelf = await stockOfProduct(amox.id);
+  expect(
+    "batch quantities are derived from the movements, not stored",
+    shelf.length === 2 &&
+      shelf.find((b) => b.batch.id === sooner.id)?.quantity === 30 &&
+      shelf.find((b) => b.batch.id === later.id)?.quantity === 100,
+    JSON.stringify(shelf.map((b) => [b.batch.batch_no, b.quantity])),
+  );
+  expect(
+    "the nearest expiry sorts first even though it arrived last",
+    shelf[0].batch.id === sooner.id,
+    shelf[0].batch.batch_no,
+  );
+
+  // Selling a PORTION: one strip of 10 must come out of the nearest-expiry
+  // batch in base units, not in strips.
+  await checkout({
+    lines: [
+      {
+        product_id: amox.id,
+        name: amox.name,
+        unit: "pc",
+        unit_price: 130,
+        quantity: 1,
+        portion_id: null,
+        portion_name: "Strip of 10",
+        portion_factor: 10,
+      },
+    ],
+    payment_method: "cash",
+    amount_tendered: 130,
+  });
+
+  const afterStrip = await stockOfProduct(amox.id);
+  expect(
+    "a partial pack is dispensed from the nearest-expiry batch",
+    afterStrip.find((b) => b.batch.id === sooner.id)?.quantity === 20 &&
+      afterStrip.find((b) => b.batch.id === later.id)?.quantity === 100,
+    JSON.stringify(afterStrip.map((b) => [b.batch.batch_no, b.quantity])),
+  );
+
+  // A quantity larger than the nearest batch must SPAN batches rather than
+  // failing or silently taking it all from one.
+  await checkout({
+    lines: [{ product_id: amox.id, name: amox.name, unit: "pc", unit_price: 15, quantity: 30 }],
+    payment_method: "cash",
+    amount_tendered: 450,
+  });
+  const afterSpan = await stockOfProduct(amox.id);
+  expect(
+    "a sale bigger than one batch spans into the next",
+    afterSpan.find((b) => b.batch.id === sooner.id)?.quantity === 0 &&
+      afterSpan.find((b) => b.batch.id === later.id)?.quantity === 90,
+    JSON.stringify(afterSpan.map((b) => [b.batch.batch_no, b.quantity])),
+  );
+
+  // --- expired stock is never dispensed -------------------------------------
+  const expiredProd = await saveProduct({
+    name: "Old Syrup 100ml",
+    unit: "pc",
+    buying_price: 50,
+    selling_price: 90,
+    low_stock_threshold: 2,
+    track_batches: true,
+  });
+  const deadBatch = await saveBatch({
+    product_id: expiredProd.id,
+    batch_no: "SYR-OLD",
+    expiry_date: day(-30),
+  });
+  await recordMovement({
+    product_id: expiredProd.id,
+    delta: 40,
+    reason: "restock",
+    buying_price: 50,
+    batch_id: deadBatch.id,
+  });
+
+  // THE claim of the whole feature. The stock exists, the count says 40, and
+  // the till must still refuse — quietly dispensing it is the failure this was
+  // built to prevent.
+  let expiredBlocked = false;
+  try {
+    await checkout({
+      lines: [
+        {
+          product_id: expiredProd.id,
+          name: expiredProd.name,
+          unit: "pc",
+          unit_price: 90,
+          quantity: 1,
+        },
+      ],
+      payment_method: "cash",
+      amount_tendered: 90,
+    });
+  } catch {
+    expiredBlocked = true;
+  }
+  expect("expired stock cannot be dispensed, even though the count says 40", expiredBlocked);
+  expect(
+    "...and the refusal leaves the stock untouched rather than half-selling it",
+    (await stockOfProduct(expiredProd.id))[0].quantity === 40,
+  );
+
+  const alloc = allocateFefo(await stockOfProduct(expiredProd.id), 1);
+  expect(
+    "FEFO reports nothing available rather than offering the expired batch",
+    alloc.available === 0 && alloc.short === 1 && alloc.lines.length === 0,
+    JSON.stringify(alloc),
+  );
+
+  // --- stock that predates batch tracking stays sellable ---------------------
+  // Otherwise turning the feature on for a product already on the shelf would
+  // make it unsellable, and the shop would simply turn it back off.
+  const legacyAlloc = allocateFefo([], 5, { unbatched: 25 });
+  expect(
+    "pre-batch stock is usable, and marked as having no known expiry",
+    legacyAlloc.short === 0 &&
+      legacyAlloc.fromUnbatched === 5 &&
+      legacyAlloc.lines[0].batch_id === null,
+    JSON.stringify(legacyAlloc),
+  );
+
+  // ...but only AFTER every dated batch, so the dated stock drains first.
+  const mixed = batchStock(
+    [
+      {
+        id: "b1",
+        shop_id: SESSION.shop_id,
+        product_id: "p1",
+        batch_no: "B1",
+        expiry_date: day(30),
+        note: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        synced_at: null,
+      },
+    ],
+    [
+      {
+        id: "m1",
+        shop_id: SESSION.shop_id,
+        product_id: "p1",
+        user_id: SESSION.user_id,
+        delta: 4,
+        reason: "restock",
+        buying_price: null,
+        total_cost: null,
+        sale_id: null,
+        batch_id: "b1",
+        note: null,
+        note_ref: null,
+        created_at: new Date().toISOString(),
+        synced_at: null,
+      },
+    ],
+  );
+  const mixedAlloc = allocateFefo(mixed, 6, { unbatched: 10 });
+  expect(
+    "dated stock is used before undated stock",
+    mixedAlloc.lines[0].batch_id === "b1" &&
+      mixedAlloc.lines[0].quantity === 4 &&
+      mixedAlloc.lines[1].batch_id === null &&
+      mixedAlloc.lines[1].quantity === 2,
+    JSON.stringify(mixedAlloc.lines),
+  );
+
+  // --- the expiry report and the recall question ----------------------------
+  const expiring = await expiringStock();
+  expect(
+    "expired stock sorts to the very top of the expiry list",
+    expiring[0]?.batch.batch_no === "SYR-OLD",
+    expiring.map((r) => r.batch.batch_no).join(", "),
+  );
+  expect(
+    "a batch with nothing left is not reported as a problem",
+    !expiring.some((r) => r.batch.batch_no === "AMX-SOON"),
+    expiring.map((r) => r.batch.batch_no).join(", "),
+  );
+  expect(
+    "a batch expiring beyond the window is not reported either",
+    !expiring.some((r) => r.batch.batch_no === "AMX-LATE"),
+  );
+
+  // The recall question: which sales touched this batch.
+  const touched = await salesOfBatch(sooner.id);
+  expect(
+    "every sale that touched a batch can be found again",
+    touched.length === 2 && touched.reduce((t, r) => t + r.quantity, 0) === 30,
+    JSON.stringify(touched),
+  );
+
   // --- a past day is empty, and today's figures are untouched -------------
   const yesterday = businessDate(new Date(Date.now() - 86_400_000));
   const past = await dayTotals(yesterday);

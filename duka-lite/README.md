@@ -31,6 +31,7 @@ Create a project at [supabase.com](https://supabase.com), then in **SQL Editor**
 12. `supabase/migrations/0009b_refunds.sql` — refunds, owner-only, `sync_refund`
 13. `supabase/migrations/0010_optional_mpesa_code.sql` — the M-Pesa code becomes optional
 14. `supabase/migrations/0011_product_images.sql` — product photos
+15. `supabase/migrations/0012_batches_and_expiry.sql` — batches, expiry dates, FEFO dispensing
 10. `supabase/seed.sql` — 20 realistic duka products with opening stock
 
 **0003a/0003b, 0007a/0007b and 0009a/0009b must each be run as two separate statements**, not pasted
@@ -279,6 +280,52 @@ Settings also lists everything on the device that has not reached the server and
 plain text. A phone that dies takes its unsynced records with it — that is inherent to working
 offline and cannot be engineered away. What it can be is *recoverable*: one share turns a lost
 phone into an afternoon of retyping rather than lost sales and lost debts.
+
+## Batches and expiry (running this in a chemist)
+
+The money half of this app transfers to a pharmacy unchanged. The stock half did not, and the gap
+was a safety issue rather than a missing feature: **the app tracked how many you had and never
+which ones expire when**, so it would dispense expired medicine without a murmur. It also could
+not answer the only question that matters during a recall — did we sell any of batch XYZ.
+
+`CHEMIST-PLAN.md` records the scoping decisions. What is built:
+
+**A batch is a delivery**, identified by the number printed on the carton, carrying an expiry
+date. Its remaining quantity is **derived** by summing the movements that name it — the same
+shape `products.quantity` and the debt balance already use. No new source of truth, nothing that
+can desync.
+
+**Dispensing is FEFO — first expiry, first out.** Not FIFO: a carton received later can easily
+expire sooner, and the risk being managed is the death date, not age. It is `allocate()` from the
+debt ledger with the sort key changed, and it works in base units, so **ten tablets out of a strip
+of thirty** still resolve to a specific batch. A sale bigger than one batch spans into the next.
+
+**Expired stock is skipped entirely, not used last.** Selling expired medicine is not a lesser
+option to fall back on, so if the only stock left is expired the allocator reports *none
+available* and the till refuses — naming the product and telling the attendant to check the shelf.
+The count still says 40; the sale still stops.
+
+**Opt in per product.** A chemist also sells cotton wool and razor blades. Demanding a batch
+number for those trains staff to type rubbish into the one field that has to be trustworthy.
+
+**Stock that predates batch tracking stays sellable**, allocated only after every dated batch.
+This matters more than it looks: without it, turning the feature on for a product already on the
+shelf would make it unsellable, and the shop would simply turn it back off — losing expiry
+tracking altogether, which is far worse than trading down old stock nobody dated.
+
+**Returns go back to the batch they came from**, mirroring the original split if the sale spanned
+two. Returning them to whichever batch expires first would put stock under a date that was never
+on that carton.
+
+The **Expiry screen** leads with expired stock as a standing instruction rather than a statistic,
+then lists what is dying, soonest first. The bands are actions, not decoration: a wholesaler will
+usually take stock back with three months of life and almost never with less than one, so 90 days
+means *return it*, 30 days means *too late to return*, and expired means *pull it off the shelf*.
+
+Also carried: `is_pom` for prescription-only products. The dispensing record that uses it —
+prescriber, patient, prescription reference — is the next piece of work, along with batch
+traceability in the UI. Controlled-drugs registers and eTIMS are deliberately out; see
+`CHEMIST-PLAN.md` for why.
 
 ## Product photos
 

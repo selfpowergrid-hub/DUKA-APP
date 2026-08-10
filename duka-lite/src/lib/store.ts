@@ -1,6 +1,7 @@
 "use client";
 
 import { db, META_KEYS, metaGet, metaSet } from "./db";
+import { allocateFefo, batchStock, daysUntil, unbatchedQuantity } from "./batches";
 import { MAX_IMAGE_BYTES } from "./image";
 import { DEFAULT_TEMPLATE } from "./remind";
 import { supabase } from "./supabase";
@@ -21,6 +22,7 @@ import type {
   MovementReason,
   PaymentMethod,
   Product,
+  ProductBatch,
   ProductImage,
   ProductPortion,
   ProductUnit,
@@ -236,15 +238,20 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
     [...productById.values()].filter((p) => p.track_stock !== false).map((p) => p.id),
   );
 
-  const movements: StockMovement[] = input.lines
-    .filter((l) => tracked.has(l.product_id))
-    .map((l) => ({
-      id: uuid(),
+  // Stock leaving the shop. For an ordinary product that is one movement; for
+  // a batch-tracked one it is a FEFO split, so ten tablets out of a strip of
+  // thirty still resolve to a specific batch with a specific expiry.
+  const movements: StockMovement[] = [];
+  for (const l of input.lines) {
+    if (!tracked.has(l.product_id)) continue;
+    const product = productById.get(l.product_id);
+    // Always in the product's own unit, never in portions.
+    const need = baseOf(l);
+
+    const base = {
       shop_id: session.shop_id,
       product_id: l.product_id,
       user_id: session.user_id,
-      // Always in the product's own unit, never in portions.
-      delta: -baseOf(l),
       reason: "sale" as MovementReason,
       buying_price: null,
       total_cost: null,
@@ -253,7 +260,45 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
       note_ref: null,
       created_at: nowIso,
       synced_at: null,
-    }));
+    };
+
+    if (!product?.track_batches) {
+      movements.push({ id: uuid(), ...base, delta: -need, batch_id: null });
+      continue;
+    }
+
+    const productBatches = await db.product_batches
+      .where("product_id")
+      .equals(l.product_id)
+      .toArray();
+    const productMovements = await db.stock_movements
+      .where("product_id")
+      .equals(l.product_id)
+      .toArray();
+    const shelf = batchStock(productBatches, productMovements);
+    const { lines: split, short, available } = allocateFefo(shelf, need, {
+      // Stock that predates batch tracking is still sellable, but only after
+      // every dated batch — see allocateFefo.
+      unbatched: unbatchedQuantity(productMovements),
+    });
+
+    // Expired batches are skipped by the allocator rather than used last, so a
+    // shortfall here can mean "none left" OR "the only stock left is expired".
+    // Both must stop the sale: dispensing expired medicine is not a lesser
+    // option to fall back on, and quietly selling it is exactly the failure
+    // this whole feature exists to prevent.
+    if (short > 0.0001) {
+      throw new Error(
+        available > 0
+          ? `Only ${qty(available)} of ${l.name} is in date. Check the shelf for expired stock.`
+          : `${l.name} has no stock in date. Do not dispense it.`,
+      );
+    }
+
+    for (const part of split) {
+      movements.push({ id: uuid(), ...base, delta: -part.quantity, batch_id: part.batch_id });
+    }
+  }
 
   // A credit sale is TWO rows: the sale and its debt charge. They ride in one
   // outbox entry and one server transaction, for the same reason opening stock
@@ -399,6 +444,8 @@ export async function recordMovement(args: {
   total_cost?: number | null;
   note?: string | null;
   note_ref?: string | null;
+  /** Which batch this moves. Required for a product that tracks batches. */
+  batch_id?: string | null;
   /** Lets a delivery entered this morning be filed against yesterday. */
   created_at?: string;
 }): Promise<void> {
@@ -421,6 +468,7 @@ export async function recordMovement(args: {
     buying_price: args.buying_price ?? null,
     total_cost: args.total_cost ?? null,
     sale_id: null,
+    batch_id: args.batch_id ?? null,
     note: args.note ?? null,
     note_ref: args.note_ref ?? null,
     created_at: args.created_at ?? new Date().toISOString(),
@@ -486,6 +534,72 @@ export async function recordAdjustment(args: {
   });
 
   return round3(onHand + delta);
+}
+
+// ---------------------------------------------------------------------------
+// Batches and expiry
+// ---------------------------------------------------------------------------
+
+/**
+ * Register a delivery, or correct one already known.
+ *
+ * Keyed on (product, batch number) rather than on a fresh id every time: the
+ * same batch received twice IS the same batch, and two rows would split its
+ * quantity so half of it could hide from an expiry report. The server enforces
+ * the same collapse, so two devices receiving one delivery offline still
+ * converge on a single batch.
+ */
+export async function saveBatch(args: {
+  product_id: string;
+  batch_no: string;
+  expiry_date: string;
+  note?: string | null;
+}): Promise<ProductBatch> {
+  const session = await requireSession();
+  const batchNo = args.batch_no.trim();
+  if (!batchNo) throw new Error("Enter the batch number from the carton");
+  if (!args.expiry_date) throw new Error("Enter the expiry date");
+  // A date far in the past is a typo, not a delivery. Caught here because the
+  // consequence — stock that FEFO refuses to dispense — looks like a bug.
+  if (daysUntil(args.expiry_date) < -3650) {
+    throw new Error("That expiry date looks wrong. Check the year.");
+  }
+
+  const existing = await db.product_batches
+    .where("[product_id+batch_no]")
+    .equals([args.product_id, batchNo])
+    .first();
+
+  const nowIso = new Date().toISOString();
+  const batch: ProductBatch = {
+    id: existing?.id ?? uuid(),
+    shop_id: session.shop_id,
+    product_id: args.product_id,
+    batch_no: batchNo,
+    expiry_date: args.expiry_date,
+    note: args.note?.trim() || null,
+    created_at: existing?.created_at ?? nowIso,
+    updated_at: nowIso,
+    synced_at: null,
+  };
+
+  await db.transaction("rw", [db.product_batches, db.outbox], async () => {
+    await db.product_batches.put(batch);
+    await db.outbox.add(
+      outboxEntry("batch", batch.id, {
+        id: batch.id,
+        product_id: batch.product_id,
+        batch_no: batch.batch_no,
+        expiry_date: batch.expiry_date,
+        note: batch.note,
+        created_at: batch.created_at,
+        updated_at: batch.updated_at,
+      }),
+    );
+  });
+
+  kick();
+  return batch;
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +760,14 @@ export async function refundSale(args: {
   // Goods coming back. Only for products that still exist and are tracked —
   // a sale of an untracked item never moved stock, so nothing comes back.
   const products = await db.products.bulkGet(items.map((i) => i.product_id));
+  // What the original sale took, and from which batch. Goods must go back to
+  // the batch they came from — returning them to a pool, or to whichever batch
+  // happens to expire first, would put stock under an expiry date that was
+  // never on that carton.
+  const soldMovements = (await db.stock_movements.toArray()).filter(
+    (m) => m.sale_id === sale.id && m.reason === "sale",
+  );
+
   const movements: StockMovement[] = [];
   items.forEach((item, i) => {
     const product = products[i];
@@ -653,41 +775,49 @@ export async function refundSale(args: {
     const qtyBack = round3(item.base_quantity ?? item.quantity);
     if (qtyBack <= 0) return;
 
-    movements.push({
-      id: uuid(),
+    const base = {
       shop_id: session.shop_id,
       product_id: item.product_id,
       user_id: session.user_id,
-      delta: qtyBack,
-      reason: "return",
-      note: null,
       sale_id: sale.id,
       buying_price: null,
       total_cost: null,
       note_ref: null,
       created_at: nowIso,
       synced_at: null,
-    });
+    };
 
-    // Damaged goods come back AND are written off. A single no-op movement
-    // would record that stock did not change while losing both facts, and the
-    // shrink report needs the second one.
-    if (!reason.sellable) {
+    // One line can have spanned two batches, so the reversal mirrors the split
+    // rather than assuming a single origin.
+    const origins = soldMovements.filter((m) => m.product_id === item.product_id);
+    const parts = origins.length
+      ? origins.map((m) => ({ batch_id: m.batch_id, quantity: round3(-m.delta) }))
+      : [{ batch_id: null, quantity: qtyBack }];
+
+    for (const part of parts) {
+      if (part.quantity <= 0) continue;
       movements.push({
         id: uuid(),
-        shop_id: session.shop_id,
-        product_id: item.product_id,
-        user_id: session.user_id,
-        delta: -qtyBack,
-        reason: "damage",
-        note: "Returned damaged",
-        sale_id: sale.id,
-        buying_price: null,
-        total_cost: null,
-        note_ref: null,
-        created_at: nowIso,
-        synced_at: null,
+        ...base,
+        delta: part.quantity,
+        reason: "return",
+        note: null,
+        batch_id: part.batch_id,
       });
+
+      // Damaged goods come back AND are written off. A single no-op movement
+      // would record that stock did not change while losing both facts, and the
+      // shrink report needs the second one.
+      if (!reason.sellable) {
+        movements.push({
+          id: uuid(),
+          ...base,
+          delta: -part.quantity,
+          reason: "damage",
+          note: "Returned damaged",
+          batch_id: part.batch_id,
+        });
+      }
     }
   });
 
@@ -820,6 +950,10 @@ export interface ProductInput {
   track_stock?: boolean;
   /** Clusters sealed pack sizes. Display only — stock stays independent. */
   group_name?: string | null;
+  /** Track this product per batch, with an expiry date on each delivery. */
+  track_batches?: boolean;
+  /** Prescription-only medicine. Warns at the till. */
+  is_pom?: boolean;
   /** New products only: what is already on the shelf. Ignored on edit. */
   opening_quantity?: number;
   /** New products only: what that opening stock cost in total. */
@@ -850,6 +984,8 @@ export async function saveProduct(input: ProductInput): Promise<Product> {
     category_id: input.category_id ?? existing?.category_id ?? null,
     track_stock: input.track_stock ?? existing?.track_stock ?? true,
     group_name: (input.group_name ?? existing?.group_name ?? null) || null,
+    track_batches: input.track_batches ?? existing?.track_batches ?? false,
+    is_pom: input.is_pom ?? existing?.is_pom ?? false,
     created_at: existing?.created_at ?? nowIso,
     updated_at: nowIso,
   };
@@ -915,6 +1051,12 @@ export async function saveProduct(input: ProductInput): Promise<Product> {
           shop_id: session.shop_id,
           product_id: product.id,
           user_id: session.user_id,
+          // Opening stock has no batch. A shop turning batch tracking on for a
+          // product that is already on the shelf genuinely does not know which
+          // batch that stock is, and inventing one would be worse than an
+          // honest null — FEFO simply has nothing to allocate from until the
+          // next delivery, which is the truthful state of affairs.
+          batch_id: null,
           delta: opening,
           reason: "opening",
           buying_price: product.buying_price || null,

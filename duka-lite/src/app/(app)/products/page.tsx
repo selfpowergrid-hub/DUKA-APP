@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useProducts, isLowStock } from "@/hooks/use-products";
 import { useCategories } from "@/hooks/use-categories";
 import { Thumb, useProductImages } from "@/components/product-photo";
+import { useLiveQuery } from "dexie-react-hooks";
+import { expiringStock } from "@/lib/batches";
 import { useSession } from "@/components/session-provider";
 import { Button, Input, Money } from "@/components/ui";
 import { qty } from "@/lib/format";
@@ -16,6 +18,8 @@ export default function ProductsPage() {
   const products = useProducts({ activeOnly: !showInactive });
   const categories = useCategories();
   const photos = useProductImages();
+  // Undefined until loaded, so the button cannot flash in and out on first paint.
+  const expiring = useLiveQuery(async () => (await expiringStock()).length, []);
   const { session } = useSession();
   const isOwner = session?.role === "owner";
 
@@ -62,6 +66,16 @@ export default function ProductsPage() {
               Low{lowCount ? ` · ${lowCount}` : " stock"}
             </Button>
           </Link>
+          {/* Only shown once the shop actually tracks batches. A chemist needs
+              this daily; a duka would never use it, and an empty screen behind
+              a permanent button teaches people to ignore the button. */}
+          {expiring !== undefined && expiring > 0 && (
+            <Link href="/products/expiry" className="md:w-40">
+              <Button variant="danger" className="w-full">
+                Expiry · {expiring}
+              </Button>
+            </Link>
+          )}
         </div>
 
         {isOwner && (

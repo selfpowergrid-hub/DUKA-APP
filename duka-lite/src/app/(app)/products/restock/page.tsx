@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProducts } from "@/hooks/use-products";
-import { recordMovement } from "@/lib/store";
+import { recordMovement, saveBatch } from "@/lib/store";
 import { Button, Field, Input, Money, Notice } from "@/components/ui";
 import { qty, todayInNairobi } from "@/lib/format";
 import type { Product } from "@/lib/types";
@@ -21,6 +21,8 @@ export default function RestockPage() {
   const [totalCost, setTotalCost] = useState("");
   const [date, setDate] = useState(todayInNairobi());
   const [ref, setRef] = useState("");
+  const [batchNo, setBatchNo] = useState("");
+  const [expiry, setExpiry] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,6 +61,8 @@ export default function RestockPage() {
     setTotalCost("");
     setReceived("");
     setRef("");
+    setBatchNo("");
+    setExpiry("");
     setDate(todayInNairobi());
     setError(null);
     setDone(null);
@@ -71,6 +75,14 @@ export default function RestockPage() {
     setError(null);
     try {
       if (!receivedNum || receivedNum <= 0) throw new Error("Enter the quantity received");
+      // Required, not merely prompted for, when the product tracks batches.
+      // A delivery recorded without a batch becomes stock with no expiry date,
+      // which is exactly the state this feature exists to eliminate — and it
+      // would be invisible on the expiry report rather than obviously missing.
+      if (current.track_batches) {
+        if (!batchNo.trim()) throw new Error("Enter the batch number from the carton");
+        if (!expiry) throw new Error("Enter the expiry date from the carton");
+      }
 
       // Backdating keeps the delivery on the day it actually arrived. Noon
       // Nairobi (09:00Z) so the business date can never slide either way.
@@ -79,10 +91,25 @@ export default function RestockPage() {
           ? new Date().toISOString()
           : new Date(`${date}T09:00:00.000Z`).toISOString();
 
+      // The batch is registered FIRST, so the movement can name it. Both are
+      // separate outbox entries, and that is safe in this direction: a batch
+      // that lands without its movement is an empty batch, which is harmless
+      // and self-corrects on the next sync. The reverse — a movement naming a
+      // batch the server has never seen — would be a foreign-key violation the
+      // sync engine parks permanently.
+      const batch = current.track_batches
+        ? await saveBatch({
+            product_id: current.id,
+            batch_no: batchNo,
+            expiry_date: expiry,
+          })
+        : null;
+
       await recordMovement({
         product_id: current.id,
         delta: receivedNum,
         reason: "restock",
+        batch_id: batch?.id ?? null,
         buying_price: derivedUnit > 0 ? Math.round(derivedUnit * 100) / 100 : current.buying_price,
         total_cost: derivedTotal > 0 ? derivedTotal : null,
         note_ref: ref.trim() || null,
@@ -95,6 +122,8 @@ export default function RestockPage() {
       setPicked(null);
       setReceived("");
       setSearch("");
+      setBatchNo("");
+      setExpiry("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save");
     } finally {
@@ -256,6 +285,29 @@ export default function RestockPage() {
                 onChange={(e) => setDate(e.target.value || todayInNairobi())}
               />
             </Field>
+            {current.track_batches && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Batch number" hint="Exactly as printed on the carton.">
+                  <Input
+                    required
+                    value={batchNo}
+                    onChange={(e) => setBatchNo(e.target.value.toUpperCase())}
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field label="Expiry date" hint="If only a month is printed, use its last day.">
+                  <Input
+                    type="date"
+                    required
+                    value={expiry}
+                    onChange={(e) => setExpiry(e.target.value)}
+                  />
+                </Field>
+              </div>
+            )}
+
             <Field label="Reference" hint="Optional. Invoice or delivery note number.">
               <Input value={ref} onChange={(e) => setRef(e.target.value)} />
             </Field>
