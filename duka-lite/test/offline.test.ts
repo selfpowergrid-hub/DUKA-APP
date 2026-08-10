@@ -1801,6 +1801,96 @@ async function main() {
     `${afterRepayNoCode.mpesaWithoutCode} vs ${codeDayBefore.mpesaWithoutCode}`,
   );
 
+  // =======================================================================
+  // Product photos
+  // =======================================================================
+  // prepareImage() itself needs a canvas and is exercised by the browser suite;
+  // what is tested here is everything after it — storage, the size ceiling, and
+  // the queue behaviour that decides whether a shop on 2G can actually sync.
+  const { saveProductImage, removeProductImage } = await import("../src/lib/store");
+  const { MAX_IMAGE_BYTES, formatBytes } = await import("../src/lib/image");
+
+  const fakePhoto = (marker: string, bytes = 12000) => ({
+    data: `data:image/webp;base64,${marker.repeat(64)}`,
+    width: 256,
+    height: 256,
+    bytes,
+  });
+
+  const photoProduct = await saveProduct({
+    name: "Tomatoes loose",
+    unit: "kg",
+    buying_price: 60,
+    selling_price: 90,
+    low_stock_threshold: 2,
+  });
+
+  await saveProductImage(photoProduct.id, fakePhoto("A"));
+  const storedPhoto = await db.product_images.get(photoProduct.id);
+  expect("a photo is stored against its product", storedPhoto?.data.includes("A") === true);
+  expect(
+    "it queues for the server",
+    (await db.outbox.where("kind").equals("product_image").count()) === 1,
+  );
+
+  // Photographing the same product four times offline must not queue four
+  // payloads of ~15KB each when only the last one matters. On a slow
+  // connection that difference is the whole point.
+  await saveProductImage(photoProduct.id, fakePhoto("B"));
+  await saveProductImage(photoProduct.id, fakePhoto("C"));
+  await saveProductImage(photoProduct.id, fakePhoto("D"));
+  const queued = await db.outbox.where("kind").equals("product_image").toArray();
+  expect(
+    "re-photographing collapses to a single queued payload",
+    queued.length === 1,
+    `${queued.length} queued`,
+  );
+  expect(
+    "...and the one that survives is the newest",
+    (queued[0].payload as { data: string }).data.includes("D"),
+  );
+  expect(
+    "the stored photo is the newest too",
+    (await db.product_images.get(photoProduct.id))?.data.includes("D") === true,
+  );
+
+  // The ceiling is enforced client-side as well as in the database, because a
+  // browser that cannot encode WebP silently falls back to something far
+  // larger and would otherwise fill the shop's own database.
+  let tooBig = false;
+  try {
+    await saveProductImage(photoProduct.id, fakePhoto("E", MAX_IMAGE_BYTES + 1));
+  } catch {
+    tooBig = true;
+  }
+  expect("an oversized photo is refused before it is stored", tooBig);
+  expect(
+    "...and the good photo is untouched by the refusal",
+    (await db.product_images.get(photoProduct.id))?.data.includes("D") === true,
+  );
+
+  // Removing sends an empty payload rather than deleting nothing: the server
+  // has to be told, or the photo comes straight back on the next pull.
+  await removeProductImage(photoProduct.id);
+  expect(
+    "removing clears it locally",
+    (await db.product_images.get(photoProduct.id)) === undefined,
+  );
+  const afterRemoval = await db.outbox.where("kind").equals("product_image").toArray();
+  expect(
+    "...and tells the server, rather than silently forgetting",
+    afterRemoval.length === 1 && (afterRemoval[0].payload as { data: unknown }).data === null,
+  );
+
+  // A photo is not money. Discarding one must never carry the warning that a
+  // stranded sale does.
+  expect(
+    "a photo is not treated as money in the outbox",
+    !isMoneyEntry(afterRemoval[0]),
+  );
+
+  expect("byte sizes read in KB for a human", formatBytes(12000) === "11.7 KB", formatBytes(12000));
+
   // --- a past day is empty, and today's figures are untouched -------------
   const yesterday = businessDate(new Date(Date.now() - 86_400_000));
   const past = await dayTotals(yesterday);

@@ -31,6 +31,7 @@ const MIGRATIONS = [
   "0009a_refund_enums.sql",
   "0009b_refunds.sql",
   "0010_optional_mpesa_code.sql",
+  "0011_product_images.sql",
 ];
 
 const db = new PGlite();
@@ -1171,6 +1172,110 @@ try {
   reversalNoSale = true;
 }
 expect("a reversal with no sale attached is rejected", reversalNoSale);
+
+// =========================================================================
+// 0011 — product photos
+// =========================================================================
+const tinyPng =
+  "data:image/webp;base64," + "U".repeat(400); // shape is what the CHECK tests
+
+const callImage = (data, updated) =>
+  as(owner, () =>
+    q("select public.sync_product_image($1::jsonb)", [
+      JSON.stringify({
+        product_id: prod,
+        data,
+        width: 256,
+        height: 256,
+        bytes: 12000,
+        created_at: new Date().toISOString(),
+        updated_at: updated,
+      }),
+    ]),
+  );
+
+const t1 = new Date(Date.now() - 60_000).toISOString();
+await callImage(tinyPng, t1);
+await db.exec("reset role;");
+expect(
+  "a product photo is stored",
+  Number((await q("select count(*) c from public.product_images where product_id=$1", [prod]))
+    .rows[0].c) === 1,
+);
+
+// Unlike the money records this one is last-write-wins: a photo is a
+// correction, and replacing a bad one has to actually replace it.
+const t2 = new Date().toISOString();
+await callImage("data:image/webp;base64," + "Z".repeat(400), t2);
+await db.exec("reset role;");
+const replaced = (
+  await q("select data from public.product_images where product_id=$1", [prod])
+).rows[0].data;
+expect("a newer photo replaces the old one", replaced.includes("Z"), replaced.slice(0, 40));
+
+// ...but a STALE replay must not win. A phone offline for a day coming back
+// online must not overwrite a newer photo with the one it has been holding.
+await callImage("data:image/webp;base64," + "Q".repeat(400), t1);
+await db.exec("reset role;");
+const afterStale = (
+  await q("select data from public.product_images where product_id=$1", [prod])
+).rows[0].data;
+expect("a stale photo does not overwrite a newer one", afterStale.includes("Z"));
+
+// The ceiling exists for the browser that cannot encode WebP and silently
+// hands back a PNG an order of magnitude larger.
+let oversize = false;
+try {
+  await q(
+    `insert into public.product_images (product_id, shop_id, user_id, data, created_at, updated_at)
+     values ($1, $2, $3, $4, now(), now())
+     on conflict (product_id) do update set data = excluded.data`,
+    [prod, shop, owner, "data:image/png;base64," + "A".repeat(250000)],
+  );
+} catch {
+  oversize = true;
+}
+expect("an oversized photo is rejected by the database, not just the client", oversize);
+
+let notAnImage = false;
+try {
+  await q(
+    `insert into public.product_images (product_id, shop_id, user_id, data, created_at, updated_at)
+     values (gen_random_uuid(), $1, $2, 'not-a-data-url', now(), now())`,
+    [shop, owner],
+  );
+} catch {
+  notAnImage = true;
+}
+expect("something that is not an image data URL is rejected", notAnImage);
+
+// Removing the photo is the same call with no data.
+await callImage(null, new Date(Date.now() + 1000).toISOString());
+await db.exec("reset role;");
+expect(
+  "sending no data removes the photo",
+  Number((await q("select count(*) c from public.product_images where product_id=$1", [prod]))
+    .rows[0].c) === 0,
+);
+
+// A photo may not be attached to another shop's product.
+let crossShop = false;
+try {
+  await as(other, () =>
+    q("select public.sync_product_image($1::jsonb)", [
+      JSON.stringify({
+        product_id: prod,
+        data: tinyPng,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    ]),
+  );
+} catch {
+  crossShop = true;
+}
+await db.exec("reset role;");
+expect("a photo cannot be attached to another shop's product", crossShop);
 
 // --- weighted-average cost ------------------------------------------------
 // The scenario the old "latest cost" behaviour got wrong: buy cheap, then buy

@@ -128,6 +128,13 @@ with checks as (
                and c.conname='sales_payment_shape'
              limit 1),
            false)
+
+  union all
+  select '0011_product_images', 'product photos',
+         to_regclass('public.product_images') is not null
+     and exists (select 1 from pg_proc p
+                   join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='sync_product_image')
 )
 
 select

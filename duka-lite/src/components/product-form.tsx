@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { saveCategory, saveProduct, saveUnit, setProductActive } from "@/lib/store";
 import type { Product, ProductUnit } from "@/lib/types";
 import { Button, Field, Input, Money, Notice } from "@/components/ui";
+import { ProductPhoto } from "@/components/product-photo";
 import { qty } from "@/lib/format";
 import { useCategories } from "@/hooks/use-categories";
 import { useGroupNames, usePortions, useUnits } from "@/hooks/use-catalog";
@@ -130,6 +131,14 @@ export function ProductForm({ product }: { product?: Product }) {
 
       <Field label="Name">
         <Input required autoFocus={isNew} value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+
+      {/* Only on edit. A photo belongs to a product, and on a new product there
+          is nothing to attach it to yet — the form would have to hold the image
+          in memory and write it after save, which is a second failure path for
+          a decorative field. The form tells the owner that instead. */}
+      <Field label="Photo" hint="Optional. Appears on the Sell screen to help find the item.">
+        <ProductPhoto productId={product?.id} />
       </Field>
 
       <Field label="Category" hint="Optional. Helps you find things once you have a lot of stock.">

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useProducts, isLowStock } from "@/hooks/use-products";
 import { useCategories } from "@/hooks/use-categories";
+import { Thumb, useProductImages } from "@/components/product-photo";
 import { useSession } from "@/components/session-provider";
 import { Button, Input, Money } from "@/components/ui";
 import { qty } from "@/lib/format";
@@ -14,6 +15,7 @@ export default function ProductsPage() {
   const [category, setCategory] = useState<string>("");
   const products = useProducts({ activeOnly: !showInactive });
   const categories = useCategories();
+  const photos = useProductImages();
   const { session } = useSession();
   const isOwner = session?.role === "owner";
 
@@ -97,7 +99,16 @@ export default function ProductsPage() {
                 p.is_active ? "border-line" : "border-line opacity-50"
               } ${isOwner ? "transition-colors lg:hover:border-brand" : ""}`}
             >
-              <div className="min-w-0">
+              {/* Same 44px thumbnail as the till, so a product looks the
+                  same wherever it appears and the owner can confirm at a
+                  glance that the right photo landed on the right item. */}
+              {photos.get(p.id) && (
+                <Thumb
+                  src={photos.get(p.id)!}
+                  className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                />
+              )}
+              <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold">{p.name}</div>
                 <div className="text-sm text-muted">
                   <Money value={p.selling_price} /> / {p.unit}

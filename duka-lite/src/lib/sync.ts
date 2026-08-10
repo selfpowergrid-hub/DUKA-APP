@@ -142,6 +142,8 @@ export function describeEntry(entry: OutboxEntry): string {
       const r = p.refund as { amount?: number; reason?: string } | undefined;
       return `Refund of KES ${Math.round(Number(r?.amount ?? 0)).toLocaleString("en-KE")}`;
     }
+    case "product_image":
+      return p.data ? "A product photo" : "A removed product photo";
   }
 }
 
@@ -312,6 +314,11 @@ async function pushEntry(entry: OutboxEntry): Promise<void> {
       if (error) throw new Error(error.message);
       return;
     }
+    case "product_image": {
+      const { error } = await sb.rpc("sync_product_image", { p_image: payload });
+      if (error) throw new Error(error.message);
+      return;
+    }
     case "refund": {
       const body = payload as { refund: unknown; movements: unknown };
       const { error } = await sb.rpc("sync_refund", {
@@ -468,6 +475,16 @@ async function pullReferenceData(session: Session) {
   if (cats.status === "fulfilled" && cats.value.data?.length) {
     await db.categories.bulkPut(cats.value.data as never);
   }
+
+  // Photos are fetched LAST and on their own, deliberately. They are by far the
+  // heaviest thing this app syncs, and nothing on the till depends on them: a
+  // product with no photo yet simply looks the way it did before the feature
+  // existed. Fetching them alongside the catalogue would mean a fresh phone
+  // waiting on a few megabytes over 2G before it could sell anything.
+  //
+  // Failure is swallowed for the same reason categories are: a shop whose
+  // database has not had the 0011 migration yet must still be able to trade.
+  await pullProductImages(session);
   if (units.status === "fulfilled" && units.value.data?.length) {
     await db.units.bulkPut(units.value.data as never);
   }
@@ -478,6 +495,38 @@ async function pullReferenceData(session: Session) {
       await db.portions.clear();
       if (portions.value.data?.length) await db.portions.bulkPut(portions.value.data as never);
     });
+  }
+}
+
+/**
+ * Product photos, pulled incrementally.
+ *
+ * Only rows newer than the newest one held locally are requested, so the
+ * megabytes are paid for once rather than on every sync cycle. Photos with an
+ * unsent local edit are skipped, so a slow server copy never overwrites a
+ * change the owner just made on this phone.
+ */
+async function pullProductImages(session: Session) {
+  try {
+    const newest = await db.product_images.orderBy("updated_at").last();
+    let query = supabase()
+      .from("product_images")
+      .select("*")
+      .eq("shop_id", session.shop_id);
+    if (newest?.updated_at) query = query.gt("updated_at", newest.updated_at);
+
+    const { data, error } = await query;
+    if (error || !data?.length) return;
+
+    const pending = new Set(
+      (await db.outbox.where("kind").equals("product_image").toArray()).map((e) => e.entity_id),
+    );
+    const rows = (data as Array<Record<string, unknown>>).filter(
+      (r) => !pending.has(r.product_id as string),
+    );
+    if (rows.length) await db.product_images.bulkPut(rows as never);
+  } catch {
+    // Offline, or the table is not there yet. The till does not care.
   }
 }
 

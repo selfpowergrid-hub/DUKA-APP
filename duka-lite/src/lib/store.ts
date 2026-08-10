@@ -1,6 +1,7 @@
 "use client";
 
 import { db, META_KEYS, metaGet, metaSet } from "./db";
+import { MAX_IMAGE_BYTES } from "./image";
 import { DEFAULT_TEMPLATE } from "./remind";
 import { supabase } from "./supabase";
 import { businessDate, qty } from "./format";
@@ -20,6 +21,7 @@ import type {
   MovementReason,
   PaymentMethod,
   Product,
+  ProductImage,
   ProductPortion,
   ProductUnit,
   Refund,
@@ -484,6 +486,96 @@ export async function recordAdjustment(args: {
   });
 
   return round3(onHand + delta);
+}
+
+// ---------------------------------------------------------------------------
+// Product photos
+// ---------------------------------------------------------------------------
+
+/**
+ * Attach or replace a product's photo.
+ *
+ * Written straight to IndexedDB so it shows on the till immediately, with the
+ * radio off, exactly like every other write here. Unlike the money records this
+ * one is last-write-wins rather than insert-once: a photo is a CORRECTION, and
+ * replacing a bad one has to actually replace it. That is only safe because a
+ * photo carries no money — two devices racing produces one of two photos, and
+ * either is fine.
+ *
+ * `prepared` comes from `prepareImage()`, which has already cropped, resized
+ * and compressed it. Nothing uncompressed ever reaches this function.
+ */
+export async function saveProductImage(
+  productId: string,
+  prepared: { data: string; width: number; height: number; bytes: number },
+): Promise<ProductImage> {
+  const session = await requireSession();
+  if (prepared.bytes > MAX_IMAGE_BYTES) {
+    throw new Error("That photo is too large. Try taking it again.");
+  }
+
+  const existing = await db.product_images.get(productId);
+  const nowIso = new Date().toISOString();
+  const image: ProductImage = {
+    product_id: productId,
+    shop_id: session.shop_id,
+    user_id: session.user_id,
+    data: prepared.data,
+    width: prepared.width,
+    height: prepared.height,
+    bytes: prepared.bytes,
+    created_at: existing?.created_at ?? nowIso,
+    updated_at: nowIso,
+    synced_at: null,
+  };
+
+  await db.transaction("rw", [db.product_images, db.outbox], async () => {
+    await db.product_images.put(image);
+    await queueImage(productId, image);
+  });
+
+  kick();
+  return image;
+}
+
+/** Remove a product's photo. An empty `data` tells the server to delete it. */
+export async function removeProductImage(productId: string): Promise<void> {
+  await requireSession();
+  await db.transaction("rw", [db.product_images, db.outbox], async () => {
+    await db.product_images.delete(productId);
+    await queueImage(productId, null);
+  });
+  kick();
+}
+
+/**
+ * Queue the photo, collapsing any earlier unsent version of the SAME photo.
+ *
+ * Without this, photographing one product four times while offline would push
+ * four payloads of ~15 KB each and the last three would simply overwrite the
+ * first. Only the newest state is worth sending, and on a slow connection the
+ * difference is the whole point.
+ */
+async function queueImage(productId: string, image: ProductImage | null): Promise<void> {
+  const stale = await db.outbox
+    .where("kind")
+    .equals("product_image")
+    .filter((e) => e.entity_id === productId)
+    .toArray();
+  if (stale.length) {
+    await db.outbox.bulkDelete(stale.map((e) => e.seq!));
+  }
+  await db.outbox.add(
+    outboxEntry("product_image", productId, {
+      product_id: productId,
+      data: image?.data ?? null,
+      width: image?.width ?? null,
+      height: image?.height ?? null,
+      bytes: image?.bytes ?? null,
+      created_at: image?.created_at ?? new Date().toISOString(),
+      updated_at: image?.updated_at ?? new Date().toISOString(),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------

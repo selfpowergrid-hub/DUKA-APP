@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { useProducts, isLowStock } from "@/hooks/use-products";
 import { useCategories } from "@/hooks/use-categories";
 import { usePortionsByProduct, useUnits } from "@/hooks/use-catalog";
+import { Thumb, useProductImages } from "@/components/product-photo";
 import { checkout, saveCustomer } from "@/lib/store";
 import { customerDebt, customerSummaries } from "@/lib/debt";
 import { Button, Input, Notice, PaymentTag } from "@/components/ui";
@@ -37,6 +38,7 @@ export default function SellPage() {
   const categories = useCategories();
   const units = useUnits();
   const portionsByProduct = usePortionsByProduct();
+  const photos = useProductImages();
   const [category, setCategory] = useState("");
   /** Which portioned tile is currently showing its measures. */
   const [openPortions, setOpenPortions] = useState<string | null>(null);
@@ -323,19 +325,46 @@ export default function SellPage() {
                   onClick={() =>
                     measures.length ? setOpenPortions(open ? null : p.id) : addProduct(p)
                   }
-                  className={`flex min-h-32 w-full flex-col justify-between gap-2 rounded-2xl border-2 p-3.5 text-left shadow-sm transition-all active:scale-[0.97] active:shadow-none lg:hover:-translate-y-0.5 lg:hover:border-brand lg:hover:shadow-md ${
+                  className={`relative flex min-h-32 w-full flex-col justify-between gap-2 rounded-2xl border-2 p-3.5 text-left shadow-sm transition-all active:scale-[0.97] active:shadow-none lg:hover:-translate-y-0.5 lg:hover:border-brand lg:hover:shadow-md ${
                     carted ? "border-brand bg-brand-soft shadow-md" : "border-line bg-surface"
                   }`}
                 >
-                  <span className="flex items-start justify-between gap-2">
-                    <span className="line-clamp-2 text-base leading-snug font-semibold">
-                      {p.name}
+                  {/* The count badge sits ON the photo when there is one, and
+                      only falls back to the tile corner when there is not.
+                      Reserving corner space in both cases cost the name ~32px,
+                      which on a tile already carrying a 40px thumbnail turned
+                      "Blue Band 250g" into "Blue Band…" — losing the pack size,
+                      which is precisely what a photo cannot tell you apart. */}
+                  {carted > 0 && !photos.get(p.id) && (
+                    <span className="tabular absolute top-2 right-2 z-[1] flex h-7 min-w-7 items-center justify-center rounded-full bg-brand px-1.5 text-sm font-bold text-white">
+                      {qty(carted)}
                     </span>
-                    {carted > 0 && (
-                      <span className="tabular flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-sm font-bold text-white">
-                        {qty(carted)}
+                  )}
+                  <span className="flex min-w-0 items-start gap-2">
+                    {/* 40px, inline. Deliberately small: a photo card would
+                        halve how many products fit on screen, and every sale
+                        would gain a scroll. A product with no photo renders
+                        exactly as it did before this feature existed. */}
+                    {photos.get(p.id) && (
+                      <span className="relative shrink-0">
+                        <Thumb
+                          src={photos.get(p.id)!}
+                          className="h-10 w-10 rounded-lg object-cover"
+                        />
+                        {carted > 0 && (
+                          <span className="tabular absolute -top-1.5 -right-1.5 flex h-6 min-w-6 items-center justify-center rounded-full bg-brand px-1 text-xs font-bold text-white ring-2 ring-brand-soft">
+                            {qty(carted)}
+                          </span>
+                        )}
                       </span>
                     )}
+                    <span
+                      className={`line-clamp-2 min-w-0 text-base leading-snug font-semibold ${
+                        carted > 0 && !photos.get(p.id) ? "pr-8" : ""
+                      }`}
+                    >
+                      {p.name}
+                    </span>
                   </span>
 
                   <span className="flex items-end justify-between gap-2">

@@ -166,8 +166,34 @@ const DEBT_REMINDERS = [
   { id: "00000000-0000-4000-8000-000000000e02", shop_id: SESSION.shop_id, customer_id: CUSTOMERS[2].id, user_id: SESSION.user_id, channel: "sms", balance_at_time: 300, promised_date: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10), note: null, created_at: daysAgoIso(1), synced_at: now },
 ];
 
+// A real 1x1 PNG. Small enough to inline, valid enough that the browser
+// actually decodes and paints it — a fake string would render as a broken
+// image and the tap-target and overflow checks would measure the wrong box.
+const PIXEL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z/C/HgAGgwJ/lK3Q6wAAAABJRU5ErkJggg==";
+
+// Deliberately only SOME products have photos, because the mixed row is the
+// layout that breaks: a tile with a thumbnail next to one without must not
+// change height or wrap differently.
+// Chosen by NAME, not by index: the grid sorts alphabetically, and photos on
+// products that sort last are photos nobody can see in a screenshot. These two
+// land in the first visible row on a phone.
+const PHOTO_NAMES = ["Blue Band 250g", "Colgate 75ml"];
+const PRODUCT_IMAGES = PRODUCTS.filter((p) => PHOTO_NAMES.includes(p.name)).map((p) => ({
+  product_id: p.id,
+  shop_id: SESSION.shop_id,
+  user_id: SESSION.user_id,
+  data: PIXEL,
+  width: 256,
+  height: 256,
+  bytes: 4096,
+  created_at: now,
+  updated_at: now,
+  synced_at: now,
+}));
+
 async function seed(page, data) {
-  return page.evaluate(async ({ session, products, sales, items, staff, counts, customers, debts, reminders }) => {
+  return page.evaluate(async ({ session, products, sales, items, staff, counts, customers, debts, reminders, images }) => {
     const open = () =>
       new Promise((res, rej) => {
         const r = indexedDB.open("duka-lite");
@@ -192,6 +218,7 @@ async function seed(page, data) {
     await put("customers", customers);
     await put("debt_entries", debts);
     await put("debt_reminders", reminders);
+    await put("product_images", images);
     db.close();
     return true;
   }, data);
@@ -225,6 +252,7 @@ for (const vp of VIEWPORTS) {
     customers: CUSTOMERS,
     debts: DEBT_ENTRIES,
     reminders: DEBT_REMINDERS,
+    images: PRODUCT_IMAGES,
   });
 
   for (const route of [
@@ -327,6 +355,20 @@ for (const vp of VIEWPORTS) {
       }
     }
 
+    // Thumbnails: count the ones that actually DECODED. A blank-looking tile
+    // can mean "no photo", "photo failed to decode", or "the seed silently did
+    // not land", and a screenshot cannot tell those three apart —
+    // `naturalWidth > 0` can.
+    const thumbs =
+      route === "/sell" || route === "/products"
+        ? await page.evaluate(
+            () =>
+              [...document.querySelectorAll("main img")].filter(
+                (i) => i.currentSrc.startsWith("data:image") && i.naturalWidth > 0,
+              ).length,
+          )
+        : null;
+
     // Horizontal overflow is the classic responsive failure. Measure it.
     const overflow = await page.evaluate(() => ({
       scrollW: document.documentElement.scrollWidth,
@@ -356,6 +398,7 @@ for (const vp of VIEWPORTS) {
       overflowPx: overflow.scrollW - overflow.clientW,
       offenders: overflow.offenders,
       smallTargets: small,
+      thumbs,
       errors: [...new Set(errors)].slice(0, 3),
     });
     errors.length = 0;
@@ -483,6 +526,9 @@ for (const r of report) {
   const problems = [];
   if (r.overflowPx > 0) problems.push(`H-OVERFLOW ${r.overflowPx}px ${JSON.stringify(r.offenders)}`);
   if (r.smallTargets.length) problems.push(`SMALL ${JSON.stringify(r.smallTargets)}`);
+  if (r.thumbs !== null && r.thumbs !== PRODUCT_IMAGES.length) {
+    problems.push(`THUMBS expected ${PRODUCT_IMAGES.length} decoded photos, saw ${r.thumbs}`);
+  }
   // The seeded session is a local fixture, not a real auth token, so every
   // call to Supabase is refused (401) or unreachable (404 on a project without
   // the latest migrations). That is the point of the fixture — the UI must

@@ -183,6 +183,28 @@ export interface Refund {
   synced_at: string | null;
 }
 
+/**
+ * A product photo, already compressed on the device.
+ *
+ * Kept apart from `Product` on purpose: the catalogue must load and be sellable
+ * before any photo arrives, so the till is never waiting on a few megabytes
+ * over a 2G connection.
+ */
+export interface ProductImage {
+  /** The product IS the identity — one photo each, replaced in place. */
+  product_id: string;
+  shop_id: string;
+  user_id: string;
+  /** `data:image/webp;base64,...` — renderable directly, no object URLs. */
+  data: string;
+  width: number;
+  height: number;
+  bytes: number;
+  created_at: string;
+  updated_at: string;
+  synced_at: string | null;
+}
+
 export interface Staff {
   id: string;
   shop_id: string;
@@ -328,7 +350,9 @@ export type OutboxKind =
   | "debt_entry"
   | "reminder"
   /** A reversed sale: the refund, its stock movements and any debt reversal. */
-  | "refund";
+  | "refund"
+  /** A product photo, or its removal. Never money — safe to overwrite. */
+  | "product_image";
 
 /**
  * Outbox kinds that represent money. Discarding one of these means a sale or a

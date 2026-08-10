@@ -8,6 +8,7 @@ import type {
   DebtEntry,
   DebtReminder,
   DiscardedEntry,
+  ProductImage,
   Refund,
   OutboxEntry,
   Product,
@@ -37,6 +38,7 @@ export class DukaDB extends Dexie {
   debt_entries!: EntityTable<DebtEntry, "id">;
   debt_reminders!: EntityTable<DebtReminder, "id">;
   refunds!: EntityTable<Refund, "id">;
+  product_images!: EntityTable<ProductImage, "product_id">;
   discarded!: EntityTable<DiscardedEntry, "id">;
   outbox!: EntityTable<OutboxEntry, "seq">;
   meta!: EntityTable<{ key: string; value: unknown }, "key">;
@@ -108,6 +110,13 @@ export class DukaDB extends Dexie {
     this.version(7).stores({
       refunds: "id, sale_id, business_date, created_at",
     });
+
+    // v8 — product photos, keyed by product_id rather than an id of their own:
+    // one photo per product, replaced in place, which makes every write an
+    // upsert and removes a whole class of duplicate-row bug.
+    this.version(8).stores({
+      product_images: "product_id, shop_id, updated_at",
+    });
   }
 }
 
@@ -154,6 +163,7 @@ export async function clearLocalData(): Promise<void> {
       db.debt_entries,
       db.debt_reminders,
       db.refunds,
+      db.product_images,
       db.discarded,
       db.outbox,
       db.meta,
@@ -173,6 +183,7 @@ export async function clearLocalData(): Promise<void> {
         db.debt_entries.clear(),
         db.debt_reminders.clear(),
         db.refunds.clear(),
+        db.product_images.clear(),
         db.discarded.clear(),
         db.outbox.clear(),
         db.meta.clear(),

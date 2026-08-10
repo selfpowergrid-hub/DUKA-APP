@@ -30,6 +30,7 @@ Create a project at [supabase.com](https://supabase.com), then in **SQL Editor**
 11. `supabase/migrations/0009a_refund_enums.sql` — `return` movement, `reversal` debt entry
 12. `supabase/migrations/0009b_refunds.sql` — refunds, owner-only, `sync_refund`
 13. `supabase/migrations/0010_optional_mpesa_code.sql` — the M-Pesa code becomes optional
+14. `supabase/migrations/0011_product_images.sql` — product photos
 10. `supabase/seed.sql` — 20 realistic duka products with opening stock
 
 **0003a/0003b, 0007a/0007b and 0009a/0009b must each be run as two separate statements**, not pasted
@@ -278,6 +279,53 @@ Settings also lists everything on the device that has not reached the server and
 plain text. A phone that dies takes its unsynced records with it — that is inherent to working
 offline and cannot be engineered away. What it can be is *recoverable*: one share turns a lost
 phone into an afternoon of retyping rather than lost sales and lost debts.
+
+## Product photos
+
+Optional, one per product, and shown as a 40px thumbnail on the Sell tile and the Products list.
+They help most for loose goods, repackaged items, and an attendant who does not know the stock
+yet.
+
+Photos are the first thing in this app that could plausibly break the offline guarantee, so three
+constraints shape the whole design:
+
+**Compressed on the device, before anything is stored.** A phone camera photo is 3–5 MB; two
+hundred of those is ~800 MB, which will not fit in IndexedDB and will never finish syncing on 2G.
+Centre-cropped square and re-encoded to 256px WebP, the same photo is 10–20 KB — two hundred is
+about 3 MB. An oversized file never exists inside the app at any point.
+
+There is a hard 200 KB ceiling, enforced in the client **and** in the database. It never fires for
+a healthy encode; it exists for the browser that cannot encode WebP and silently falls back to
+PNG, which for a photograph can be an order of magnitude larger. Without it, the first shop on an
+old handset would quietly fill their own database and nobody would find out until sync began
+failing.
+
+**Their own table, pulled last.** `product_images` is separate from `products` so a fresh phone
+gets the catalogue in kilobytes and can sell immediately, with photos filling in behind it. If
+they rode on the product rows, the first sync would carry megabytes before the till was usable.
+
+**They must not cost till speed.** A photo card would roughly halve how many products fit on a
+screen, so every sale would gain a scroll. A 40px inline thumbnail keeps tile height and density
+exactly as they were, and a product with no photo renders precisely as it did before the feature
+existed.
+
+One layout detail worth recording, because the browser check caught it and review would not have:
+the cart-count badge used to sit in the tile corner, reserving ~32px. On a tile also carrying a
+thumbnail that squeezed **"Blue Band 250g" down to "Blue Band…"** — losing the pack size, which is
+exactly the distinction a photo *cannot* convey. The badge now sits on the photo when there is
+one, and only falls back to the corner when there is not.
+
+**Last-write-wins, unlike everything else here.** Every money record is insert-once and
+idempotent; a photo is a *correction*, so replacing a bad one has to actually replace it. That is
+safe only because a photo carries no money — two devices racing produces one of two photos and
+either is fine, where two devices racing on a sale would produce a wrong total. A stale replay is
+still rejected by comparing `updated_at`, so a phone that was offline for a day cannot overwrite a
+newer photo with the one it has been holding. Re-photographing the same product while offline
+collapses to a single queued payload rather than four.
+
+An attendant may take photos. They are the one holding the product, and the alternative is that
+photos never get taken; a wrong photo is visibly wrong and costs nothing to replace, unlike a
+wrong price or a wrong count.
 
 ## The M-Pesa confirmation code is optional
 
