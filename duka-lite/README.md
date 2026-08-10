@@ -107,15 +107,16 @@ build nothing, and deploy an empty site — which surfaces as a **successful** d
 `404: NOT_FOUND`, not as a build failure. That combination is confusing enough to be worth
 naming here.
 
-**On Vercel this is already handled** by `vercel.json` at the repository root, which points the
-install, build and output paths into `duka-lite/`. Nothing needs configuring — but that file is
-only read when the project's **Root Directory is left at the repository root**. If Root Directory
-has been set to `duka-lite`, Vercel reads `duka-lite/vercel.json` instead, the root file is
-ignored, and the defaults work anyway.
+On **Vercel**: set **Root Directory** to `duka-lite` — in the import screen, or afterwards under
+Settings -> Build and Deployment. That is the whole fix.
 
-So either arrangement deploys. What does not work is the state this repository shipped in
-originally: Root Directory at the root with no `vercel.json`, which builds nothing and serves a
-404 while reporting success.
+**A `vercel.json` at the repository root does not work for this**, and it is worth recording why,
+because it looks like it should. `buildCommand` and `installCommand` can be pointed into a
+subdirectory happily — the install runs, packages resolve, everything looks healthy. But Vercel's
+Next.js builder reads `package.json` **from the Root Directory** to identify the framework
+version, and fails with `No Next.js version detected` before the build command is ever reached.
+Setting `framework: "nextjs"` does not substitute for it. Detection is the step that has to find
+the app, and only Root Directory moves detection.
 
 ### Checking the database is up to date
 
