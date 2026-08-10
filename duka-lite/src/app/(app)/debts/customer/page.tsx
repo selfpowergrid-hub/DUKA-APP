@@ -268,7 +268,7 @@ function CustomerDebtScreen() {
 
           {method === "mpesa" && (
             <Input
-              placeholder="M-Pesa code"
+              placeholder="M-Pesa code (optional)"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               autoCapitalize="characters"

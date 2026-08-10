@@ -29,6 +29,7 @@ const ALL = [
   "0008_debt_lifecycle.sql",
   "0009a_refund_enums.sql",
   "0009b_refunds.sql",
+  "0010_optional_mpesa_code.sql",
 ];
 const CHECK = readFileSync(pjoin(HERE, "..", "supabase", "check_migrations.sql"), "utf8");
 
@@ -60,7 +61,7 @@ const expect = (name, ok, detail = "") => {
 // --- fully migrated: everything must read ok ------------------------------
 const full = await build(ALL);
 const fullRows = (await full.query(CHECK)).rows;
-expect("reports a row per migration", fullRows.length === 12, `got ${fullRows.length}`);
+expect("reports a row per migration", fullRows.length === 13, `got ${fullRows.length}`);
 const notOk = fullRows.filter((r) => r.status !== "ok");
 expect(
   "a fully migrated database reports every migration ok",
@@ -124,7 +125,8 @@ expect(
   "a database migrated through 0005 flags exactly everything after it",
   missing.join(",") ===
     "0006_weighted_average_cost,0007a_credit_enum,0007b_customer_debt," +
-      "0008_debt_lifecycle,0009a_refund_enums,0009b_refunds",
+      "0008_debt_lifecycle,0009a_refund_enums,0009b_refunds," +
+      "0010_optional_mpesa_code",
   missing.join(",") || "(none flagged)",
 );
 

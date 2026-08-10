@@ -113,6 +113,21 @@ with checks as (
      and exists (select 1 from pg_proc p
                    join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname='public' and p.proname='sync_refund')
+
+  union all
+  -- No table or column to look for: 0010 only RELAXES two check constraints.
+  -- Detected by behaviour instead — can an M-Pesa sale exist without a code?
+  -- pg_get_constraintdef is the honest way to ask without writing a row.
+  select '0010_optional_mpesa_code', 'M-Pesa confirmation code is optional',
+         coalesce(
+           (select pg_get_constraintdef(c.oid) not ilike '%mpesa_code IS NOT NULL%'
+              from pg_constraint c
+              join pg_class t on t.oid = c.conrelid
+              join pg_namespace n on n.oid = t.relnamespace
+             where n.nspname='public' and t.relname='sales'
+               and c.conname='sales_payment_shape'
+             limit 1),
+           false)
 )
 
 select

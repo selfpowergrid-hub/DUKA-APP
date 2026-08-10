@@ -29,6 +29,7 @@ Create a project at [supabase.com](https://supabase.com), then in **SQL Editor**
 10. `supabase/migrations/0008_debt_lifecycle.sql` — part-payment at the till, reminders, promises
 11. `supabase/migrations/0009a_refund_enums.sql` — `return` movement, `reversal` debt entry
 12. `supabase/migrations/0009b_refunds.sql` — refunds, owner-only, `sync_refund`
+13. `supabase/migrations/0010_optional_mpesa_code.sql` — the M-Pesa code becomes optional
 10. `supabase/seed.sql` — 20 realistic duka products with opening stock
 
 **0003a/0003b, 0007a/0007b and 0009a/0009b must each be run as two separate statements**, not pasted
@@ -277,6 +278,36 @@ Settings also lists everything on the device that has not reached the server and
 plain text. A phone that dies takes its unsynced records with it — that is inherent to working
 offline and cannot be engineered away. What it can be is *recoverable*: one share turns a lost
 phone into an afternoon of retyping rather than lost sales and lost debts.
+
+## The M-Pesa confirmation code is optional
+
+It was compulsory, and that was wrong — not because the code is unimportant, but because
+**requiring it did not produce more codes. It produced fewer recorded sales.**
+
+The customer's SMS has not arrived, or their phone is dead, or the queue is four deep. A blocking
+field leaves the attendant two ways forward: don't record the sale, or record it as cash. The
+first loses the sale entirely; the second corrupts the cash/M-Pesa split, which is the one thing
+this app exists to keep straight. A field added for accuracy was reliably producing the two least
+accurate outcomes available.
+
+So the control moved from a **block** to **visibility**. The code is still prompted for, still
+first-class, and Closing now reports exactly what cannot be verified:
+
+- M-Pesa items with no code appear in the tick-off list as **No code**, not hidden from it
+- A warning gives the count — "3 of these have no code, so they cannot be matched to the
+  statement. The amount is still counted; only the proof is missing."
+- The shared summary and the printout carry it too
+
+"3 of today's 11 M-Pesa sales have no code" is something an owner can act on. An attendant
+blocked at the till just works around the app, and then the owner has nothing at all.
+
+**What did NOT change.** A blank code is still refused — storing `''` would make every downstream
+"does it have a code" check quietly wrong, so the client sends `NULL`. A cash sale still may not
+carry a code, a credit sale still may not, and an M-Pesa sale still may not carry a tendered
+amount. Those are shape errors, not missing information, and the distinction is the whole point:
+relax what is unknowable at the counter, keep everything that is simply incoherent.
+
+The same relaxation applies to a debt repayment made by M-Pesa, for the same reason.
 
 ## Refunds
 

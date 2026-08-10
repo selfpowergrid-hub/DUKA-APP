@@ -826,6 +826,17 @@ export default function SellPage() {
               Closing screen; the app does not check it with Safaricom.
             </p>
 
+            {/* Optional on purpose. Blocking the sale never produced more codes
+                — it produced sales recorded as cash, or not recorded at all.
+                The warning keeps the code worth entering without making the
+                till unusable when the SMS has not arrived. */}
+            {code.length === 0 && (
+              <Notice tone="warn">
+                You can record this without a code, but it will not be tickable against your
+                Safaricom statement at Closing.
+              </Notice>
+            )}
+
             {mpesaDupe && (
               <Notice tone="warn">
                 This code was already used today for {money(mpesaDupe.total)}. Check it is not
@@ -838,10 +849,12 @@ export default function SellPage() {
             <Button
               variant="mpesa"
               size="xl"
-              disabled={code.length < 6}
+              // A partially typed code is more likely a slip than a decision;
+              // an empty one is a decision. So block the first, allow the second.
+              disabled={code.length > 0 && code.length < 6}
               onClick={() => confirm("mpesa")}
             >
-              Confirm M-Pesa sale
+              {code.length === 0 ? "Confirm M-Pesa sale without a code" : "Confirm M-Pesa sale"}
             </Button>
             <Button variant="ghost" onClick={() => setStage("pay")}>
               Back

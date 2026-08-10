@@ -186,7 +186,12 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
     payment_method: input.payment_method,
     amount_tendered:
       input.payment_method === "cash" ? round2(input.amount_tendered ?? 0) : null,
-    mpesa_code: input.payment_method === "mpesa" ? (input.mpesa_code ?? "").trim() : null,
+    mpesa_code:
+      input.payment_method === "mpesa"
+        ? // "" is not a code. Storing it would make every `mpesa_code != null`
+          // check downstream quietly wrong.
+          (input.mpesa_code ?? "").trim().toUpperCase() || null
+        : null,
     business_date: businessDate(now),
     created_at: nowIso,
     synced_at: null,
@@ -196,9 +201,11 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
   if (sale.payment_method === "cash" && (sale.amount_tendered ?? 0) < total) {
     throw new Error("Amount tendered is less than the total");
   }
-  if (sale.payment_method === "mpesa" && !sale.mpesa_code) {
-    throw new Error("Enter the M-Pesa confirmation code");
-  }
+  // No guard on the M-Pesa code, deliberately. Requiring it never produced
+  // more codes — it produced fewer recorded sales, or sales miskeyed as cash,
+  // because the SMS had not arrived and the queue was four deep. Closing shows
+  // which M-Pesa sales lack a code instead, which is a control the owner can
+  // act on rather than one an attendant works around.
   if (sale.payment_method === "credit" && !sale.customer_id) {
     throw new Error("Choose who is taking this on credit");
   }
@@ -282,9 +289,6 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
       throw new Error("That covers the whole sale — take it as cash or M-Pesa instead");
     }
     if (!input.paid_now_method) throw new Error("Was the part-payment cash or M-Pesa?");
-    if (input.paid_now_method === "mpesa" && !(input.paid_now_mpesa_code ?? "").trim()) {
-      throw new Error("Enter the M-Pesa confirmation code for the part-payment");
-    }
   }
 
   const partPayment: DebtEntry | null =
@@ -302,7 +306,7 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
           payment_method: input.paid_now_method ?? null,
           mpesa_code:
             input.paid_now_method === "mpesa"
-              ? (input.paid_now_mpesa_code ?? "").trim().toUpperCase()
+              ? (input.paid_now_mpesa_code ?? "").trim().toUpperCase() || null
               : null,
           note: null,
           business_date: sale.business_date,
@@ -982,10 +986,10 @@ export async function recordDebtEntry(args: {
   if (!(args.amount > 0)) throw new Error("Enter an amount");
 
   if (args.kind === "payment") {
+    // Same reasoning as the till: a debtor who paid and cannot produce the
+    // code is still a debtor who paid, and refusing the record is worse than
+    // holding it without the reference.
     if (!args.payment_method) throw new Error("Was it cash or M-Pesa?");
-    if (args.payment_method === "mpesa" && !(args.mpesa_code ?? "").trim()) {
-      throw new Error("Enter the M-Pesa confirmation code");
-    }
   }
 
   const now = new Date();
@@ -1000,7 +1004,7 @@ export async function recordDebtEntry(args: {
     payment_method: args.kind === "payment" ? (args.payment_method ?? null) : null,
     mpesa_code:
       args.kind === "payment" && args.payment_method === "mpesa"
-        ? (args.mpesa_code ?? "").trim().toUpperCase()
+        ? (args.mpesa_code ?? "").trim().toUpperCase() || null
         : null,
     note: args.note?.trim() || null,
     business_date: businessDate(now),
@@ -1266,6 +1270,13 @@ export interface DayTotals {
    */
   mpesaRepayments: DebtEntry[];
   /**
+   * M-Pesa money taken today with no confirmation code — sales and repayments
+   * together. These are real transactions that CANNOT be ticked off against
+   * the Safaricom statement, so the count is the price of making the code
+   * optional, and the owner should be able to see it rather than discover it.
+   */
+  mpesaWithoutCode: number;
+  /**
    * Sales reversed today. Shown as their OWN line, never netted into sales:
    * "sales 12,400, refunds -800, net 11,600" is the honest shape, and a single
    * 11,600 hides exactly what the owner most wants to see. Same rule credit
@@ -1352,6 +1363,9 @@ export async function dayTotals(date: string): Promise<DayTotals> {
     refunds: refunds.sort((a, b) => a.created_at.localeCompare(b.created_at)),
     refundedCash: round2(refundedCash),
     refundedTotal: round2(refundedTotal),
+    mpesaWithoutCode:
+      sales.filter((s) => s.payment_method === "mpesa" && !s.mpesa_code).length +
+      payments.filter((e) => e.payment_method === "mpesa" && !e.mpesa_code).length,
     expectedCash: round2(cash + repaidCash + paidAtTillCash - refundedCash),
     expectedMpesa: round2(mpesa + repaidMpesa + paidAtTillMpesa),
   };

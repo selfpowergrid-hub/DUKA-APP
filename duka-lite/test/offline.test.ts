@@ -134,17 +134,7 @@ async function main() {
   }
   expect("short cash payment is refused", rejected && (await db.sales.count()) === before);
 
-  rejected = false;
-  try {
-    await checkout({
-      lines: [{ product_id: unga.id, name: unga.name, unit: "packet", unit_price: 200, quantity: 1 }],
-      payment_method: "mpesa",
-      mpesa_code: "  ",
-    });
-  } catch {
-    rejected = true;
-  }
-  expect("mpesa sale with no code is refused", rejected && (await db.sales.count()) === before);
+
 
   // --- restock ------------------------------------------------------------
   await recordMovement({ product_id: unga.id, delta: 10, reason: "restock", buying_price: 180 });
@@ -159,8 +149,10 @@ async function main() {
   expect("total is the sum of the two", totals.total === 760, `${totals.total}`);
   expect("transaction count is right", totals.count === 2, `${totals.count}`);
   expect("the M-Pesa code is listed for tick-off",
-    totals.mpesaSales.length === 1 && totals.mpesaSales[0].mpesa_code === "SGH7X2K9LM");
+    totals.mpesaSales.some((s) => s.mpesa_code === "SGH7X2K9LM"));
   expect("all sales are flagged as not yet synced", totals.unsynced === 2, `${totals.unsynced}`);
+
+
 
   // Cash count: expected is CASH ONLY. Counting the M-Pesa money in would be
   // the exact mistake this whole app exists to prevent.
@@ -1119,18 +1111,7 @@ async function main() {
   const afterPayment = await customerDebt(wanjiku.id);
   expect("a repayment reduces the balance", afterPayment?.balance === 260, `${afterPayment?.balance}`);
 
-  let mpesaRepayNoCode = false;
-  try {
-    await recordDebtEntry({
-      customer_id: wanjiku.id,
-      kind: "payment",
-      amount: 100,
-      payment_method: "mpesa",
-    });
-  } catch {
-    mpesaRepayNoCode = true;
-  }
-  expect("an M-Pesa repayment with no code is refused", mpesaRepayNoCode);
+
 
   // --- THE money rule: credit is not cash, repayments are ------------------
   const creditDay = businessDate();
@@ -1353,9 +1334,10 @@ async function main() {
   }
   expect("a part-payment covering the whole sale is refused", overPaid);
 
-  let partNoCode = false;
-  try {
-    await checkout({
+  // The part-payment follows the same rule as everything else M-Pesa: the code
+  // is prompted for, never required. What IS still required is the method,
+  // because Closing cannot put money in a column it was not told about.
+  const partNoCodeSale = await checkout({
       lines: [
         {
           product_id: partStock.id,
@@ -1365,15 +1347,22 @@ async function main() {
           quantity: 2,
         },
       ],
-      payment_method: "credit",
-      customer_id: kamau.id,
-      paid_now: 100,
-      paid_now_method: "mpesa",
-    });
-  } catch {
-    partNoCode = true;
-  }
-  expect("an M-Pesa part-payment with no code is refused", partNoCode);
+    payment_method: "credit",
+    customer_id: kamau.id,
+    paid_now: 100,
+    paid_now_method: "mpesa",
+  });
+  // Filtered rather than indexed: the app never queries debt_entries by
+  // sale_id (Closing already has the day's rows in hand), so adding an index
+  // for a test would be adding a schema version for nothing.
+  const partNoCodeEntry = (await db.debt_entries.toArray()).find(
+    (e) => e.sale_id === partNoCodeSale.id && e.kind === "payment",
+  );
+  expect(
+    "an M-Pesa part-payment records without a code",
+    partNoCodeEntry != null && partNoCodeEntry.mpesa_code === null,
+    JSON.stringify(partNoCodeEntry?.mpesa_code),
+  );
 
   // =======================================================================
   // The chase
@@ -1754,6 +1743,62 @@ async function main() {
   expect(
     "a refund counts as money in the outbox",
     refundEntry != null && isMoneyEntry(refundEntry),
+  );
+
+  // =======================================================================
+  // The M-Pesa confirmation code is optional
+  // =======================================================================
+  // Requiring it never produced more codes. It produced sales recorded as cash,
+  // or not recorded at all — the two least accurate outcomes available. The
+  // control moved from a block to visibility: Closing reports what cannot be
+  // verified rather than refusing to record it.
+  //
+  // Placed last, and measured as deltas, because an extra sale shifts every
+  // absolute total after it.
+  const codeDayBefore = await dayTotals(businessDate());
+  const noCodeSale = await checkout({
+    lines: [{ product_id: unga.id, name: unga.name, unit: "packet", unit_price: 200, quantity: 1 }],
+    payment_method: "mpesa",
+    mpesa_code: "  ",
+  });
+  const codeDayAfter = await dayTotals(businessDate());
+
+  expect(
+    "an M-Pesa sale records without a code, storing NULL rather than a blank",
+    noCodeSale.mpesa_code === null,
+    JSON.stringify(noCodeSale.mpesa_code),
+  );
+  expect(
+    "it still counts as M-Pesa money",
+    codeDayAfter.mpesa - codeDayBefore.mpesa === 200,
+    `${codeDayAfter.mpesa} - ${codeDayBefore.mpesa}`,
+  );
+  expect(
+    "...and Closing flags it as unverifiable against the statement",
+    codeDayAfter.mpesaWithoutCode - codeDayBefore.mpesaWithoutCode === 1,
+    `${codeDayAfter.mpesaWithoutCode} vs ${codeDayBefore.mpesaWithoutCode}`,
+  );
+  expect(
+    "it still appears in the tick-off list, so it cannot be quietly forgotten",
+    codeDayAfter.mpesaSales.some((s) => s.id === noCodeSale.id),
+  );
+
+  const repayNoCode = await recordDebtEntry({
+    customer_id: wanjiku.id,
+    kind: "payment",
+    amount: 100,
+    payment_method: "mpesa",
+  });
+  const afterRepayNoCode = await dayTotals(businessDate());
+  expect(
+    "an M-Pesa repayment records without a code too",
+    repayNoCode.mpesa_code === null,
+    JSON.stringify(repayNoCode.mpesa_code),
+  );
+  expect(
+    "both the sale and the repayment are counted as unverifiable",
+    afterRepayNoCode.mpesaWithoutCode - codeDayBefore.mpesaWithoutCode === 2,
+    `${afterRepayNoCode.mpesaWithoutCode} vs ${codeDayBefore.mpesaWithoutCode}`,
   );
 
   // --- a past day is empty, and today's figures are untouched -------------

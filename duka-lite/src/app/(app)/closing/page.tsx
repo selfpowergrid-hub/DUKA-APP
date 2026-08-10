@@ -111,10 +111,18 @@ export default function ClosingPage() {
     if (totals!.mpesaSales.length || totals!.mpesaRepayments.length) {
       lines.push("", "M-Pesa codes:");
       totals!.mpesaSales.forEach((s) =>
-        lines.push(`  ${s.mpesa_code}  ${money(s.total)}  ${formatClock(s.created_at)}`),
+        lines.push(`  ${s.mpesa_code ?? "NO CODE"}  ${money(s.total)}  ${formatClock(s.created_at)}`),
       );
       totals!.mpesaRepayments.forEach((e) =>
-        lines.push(`  ${e.mpesa_code}  ${money(e.amount)}  ${formatClock(e.created_at)}  (debt)`),
+        lines.push(
+          `  ${e.mpesa_code ?? "NO CODE"}  ${money(e.amount)}  ${formatClock(e.created_at)}  (debt)`,
+        ),
+      );
+    }
+    if (totals!.mpesaWithoutCode > 0) {
+      lines.push(
+        "",
+        `(${totals!.mpesaWithoutCode} M-Pesa item(s) have no code and cannot be ticked off)`,
       );
     }
     if (totals!.unsynced > 0) {
@@ -439,15 +447,34 @@ export default function ClosingPage() {
         </h2>
         <p className="mb-2 text-sm text-muted">Tick these off against your Safaricom statement.</p>
 
+        {/* Where the control went when the code stopped being compulsory.
+            The money is still counted correctly either way — what is lost is
+            the ability to VERIFY it, and that loss should be a number the
+            owner sees rather than something they discover at the statement. */}
+        {totals.mpesaWithoutCode > 0 && (
+          <div className="mb-2">
+            <Notice tone="warn">
+              {totals.mpesaWithoutCode} of these{" "}
+              {totals.mpesaWithoutCode === 1 ? "has" : "have"} no code, so{" "}
+              {totals.mpesaWithoutCode === 1 ? "it" : "they"} cannot be matched to the statement.
+              The amount is still counted — only the proof is missing.
+            </Notice>
+          </div>
+        )}
+
         {totals.mpesaSales.length + totals.mpesaRepayments.length === 0 ? (
           <p className="py-4 text-center text-muted">No M-Pesa money on this day.</p>
         ) : (
           <ul className="print-scroll flex max-h-[60vh] flex-col divide-y divide-line overflow-y-auto">
             {totals.mpesaSales.map((s) => (
               <li key={s.id} className="flex items-center justify-between gap-2 py-3">
-                <span className="font-mono text-base font-semibold tracking-wide">
-                  {s.mpesa_code}
-                </span>
+                {s.mpesa_code ? (
+                  <span className="font-mono text-base font-semibold tracking-wide">
+                    {s.mpesa_code}
+                  </span>
+                ) : (
+                  <span className="text-base font-semibold text-warn">No code</span>
+                )}
                 <span className="flex items-center gap-3">
                   <span className="text-sm text-muted">{formatClock(s.created_at)}</span>
                   <Money value={s.total} className="font-bold" />
@@ -457,9 +484,13 @@ export default function ClosingPage() {
             {totals.mpesaRepayments.map((e) => (
               <li key={e.id} className="flex items-center justify-between gap-2 py-3">
                 <span className="min-w-0">
-                  <span className="block font-mono text-base font-semibold tracking-wide">
-                    {e.mpesa_code}
-                  </span>
+                  {e.mpesa_code ? (
+                    <span className="block font-mono text-base font-semibold tracking-wide">
+                      {e.mpesa_code}
+                    </span>
+                  ) : (
+                    <span className="block text-base font-semibold text-warn">No code</span>
+                  )}
                   <span className="text-sm text-muted">debt repaid</span>
                 </span>
                 <span className="flex items-center gap-3">

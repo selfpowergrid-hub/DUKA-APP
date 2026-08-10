@@ -30,6 +30,7 @@ const MIGRATIONS = [
   "0008_debt_lifecycle.sql",
   "0009a_refund_enums.sql",
   "0009b_refunds.sql",
+  "0010_optional_mpesa_code.sql",
 ];
 
 const db = new PGlite();
@@ -152,7 +153,6 @@ const badShapes = [
   ["cash sale with an mpesa code is rejected", `'cash', 500, 'SGH7X2K9LM'`],
   ["cash sale with no tendered amount is rejected", `'cash', null, null`],
   ["mpesa sale with a tendered amount is rejected", `'mpesa', 500, 'SGH7X2K9LM'`],
-  ["mpesa sale with no code is rejected", `'mpesa', null, null`],
   ["cash tendered below the total is rejected", `'cash', 100, null`],
 ];
 for (const [name, vals] of badShapes) {
@@ -168,6 +168,48 @@ for (const [name, vals] of badShapes) {
   }
   expect(name, rejected);
 }
+
+// 0010 — an M-Pesa sale with no confirmation code is now ACCEPTED.
+// Requiring it never produced more codes; it produced sales recorded as cash
+// or not recorded at all, which are the two worst outcomes available.
+let mpesaNoCode = true;
+try {
+  await q(
+    `insert into public.sales (id, shop_id, user_id, total, payment_method, mpesa_code, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, 400, 'mpesa', null, current_date, now())`,
+    [shop, owner],
+  );
+} catch {
+  mpesaNoCode = false;
+}
+expect("an M-Pesa sale with no code is accepted", mpesaNoCode);
+
+// A BLANK code is still refused. Storing '' would make every downstream
+// "does it have a code" check quietly wrong, which is worse than NULL.
+let blankCode = false;
+try {
+  await q(
+    `insert into public.sales (id, shop_id, user_id, total, payment_method, mpesa_code, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, 400, 'mpesa', '   ', current_date, now())`,
+    [shop, owner],
+  );
+} catch {
+  blankCode = true;
+}
+expect("a blank M-Pesa code is still rejected", blankCode);
+
+// The shape rules that are NOT about missing information still hold.
+let cashWithCode = false;
+try {
+  await q(
+    `insert into public.sales (id, shop_id, user_id, total, payment_method, amount_tendered, mpesa_code, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, 400, 'cash', 400, 'SGH7X2K9LM', current_date, now())`,
+    [shop, owner],
+  );
+} catch {
+  cashWithCode = true;
+}
+expect("a cash sale carrying an M-Pesa code is still rejected", cashWithCode);
 
 // --- THE headline claim: sync_sale is idempotent ---------------------------
 const payload = {
@@ -571,7 +613,10 @@ try {
 }
 expect("a repayment with no payment method is rejected", payNoMethod);
 
-let mpesaPayNoCode = false;
+// 0010 flipped this: a debtor who paid and cannot produce the code is still a
+// debtor who paid, and refusing the record is worse than holding it without
+// the reference. Closing flags it as unverifiable instead.
+let mpesaPayNoCode = true;
 try {
   await q(
     `insert into public.debt_entries (id, shop_id, customer_id, user_id, kind, amount, payment_method, business_date, created_at)
@@ -579,9 +624,23 @@ try {
     [shop, wanjiku, owner],
   );
 } catch {
-  mpesaPayNoCode = true;
+  mpesaPayNoCode = false;
 }
-expect("an M-Pesa repayment with no code is rejected", mpesaPayNoCode);
+expect("an M-Pesa repayment with no code is accepted", mpesaPayNoCode);
+
+// A CASH repayment carrying an M-Pesa code is still a shape error, not
+// missing information, and is still refused.
+let cashPayWithCode = false;
+try {
+  await q(
+    `insert into public.debt_entries (id, shop_id, customer_id, user_id, kind, amount, payment_method, mpesa_code, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, $3, 'payment', 100, 'cash', 'SGH7X2K9LM', current_date, now())`,
+    [shop, wanjiku, owner],
+  );
+} catch {
+  cashPayWithCode = true;
+}
+expect("a cash repayment carrying an M-Pesa code is still rejected", cashPayWithCode);
 
 // A charge must never be creatable outside its sale.
 let chargeViaRpc = false;
