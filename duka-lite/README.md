@@ -107,8 +107,15 @@ build nothing, and deploy an empty site — which surfaces as a **successful** d
 `404: NOT_FOUND`, not as a build failure. That combination is confusing enough to be worth
 naming here.
 
-On **Vercel**: Settings -> Build and Deployment -> **Root Directory** -> `duka-lite`, then
-redeploy. Everything else is detected correctly from there.
+**On Vercel this is already handled** by `vercel.json` at the repository root, which points the
+install, build and output paths into `duka-lite/`. Nothing needs configuring — but that file is
+only read when the project's **Root Directory is left at the repository root**. If Root Directory
+has been set to `duka-lite`, Vercel reads `duka-lite/vercel.json` instead, the root file is
+ignored, and the defaults work anyway.
+
+So either arrangement deploys. What does not work is the state this repository shipped in
+originally: Root Directory at the root with no `vercel.json`, which builds nothing and serves a
+404 while reporting success.
 
 ### Checking the database is up to date
 
