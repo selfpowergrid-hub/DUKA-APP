@@ -576,17 +576,24 @@ as an attendant. Owners manage products; attendants sell and count cash.
 
 ## Deliberately not built
 
-Credit sales · customers or loyalty · suppliers or purchase orders · barcode scanning ·
-multi-branch · discounts or promotions · returns or refunds · VAT or eTIMS · M-Pesa Daraja /
-STK Push · receipt printers · charts and dashboards · dark mode · multi-currency ·
-CSV import/export · SMS.
+Suppliers or purchase orders · barcode scanning · multi-branch · discounts or promotions ·
+returns or refunds · VAT or eTIMS · M-Pesa Daraja / STK Push · receipt printers · charts and
+dashboards · dark mode · multi-currency · CSV import/export · SMS gateway.
 
-Two of these will feel necessary in use:
+**Built since, on an explicit decision to expand scope:** credit sales, customers, and the debt
+lifecycle. The brief excluded them; the owner asked for them; `BACKLOG.md` records the reasoning
+so it stays a decision rather than drift. Loyalty is still out — the customer record exists
+because debt needs somewhere to hang, and for no other reason.
 
-- **Returns/refunds.** An attendant will mis-key a sale. Today the sale stands, the owner
-  reconciles by eye, and an `adjustment` movement fixes stock only. A void flow needs a
-  decision about who is allowed to void and whether it is visible on Closing — that is a
-  policy question, not a coding one.
+Two of the remaining exclusions will feel necessary in use:
+
+- **Returns/refunds.** The biggest gap, and the one most likely to bite. An attendant will
+  mis-key a sale. Today that sale stands for ever: it still counts toward expected cash, so the
+  drawer reads short by exactly the mistake — and a shortfall the owner cannot explain is
+  indistinguishable from theft, which is the one thing this app exists to tell apart. An
+  `adjustment` movement fixes the stock and nothing fixes the money. What is missing is not code
+  but two decisions: **who may void**, and **whether a refund against a credit sale is a cash
+  refund or a reversal of the charge**. Get those wrong and you have built a new way to steal.
 - **Daraja / STK Push.** The manually-typed M-Pesa code is the control the owner actually
   wants, and unlike an API call it works with no internet.
 
