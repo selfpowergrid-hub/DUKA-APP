@@ -259,6 +259,27 @@ for (const vp of VIEWPORTS) {
     // Open the chase sheet and the credit step — panels that only exist after
     // a tap, and therefore the ones most likely to overflow a 390px screen
     // unnoticed.
+    // The refund sheet only exists after two taps, so it would never be
+    // measured otherwise — and it is the densest panel on the screen.
+    if (route === "/closing") {
+      const show = page.getByRole("button", { name: /Show \/ refund|Show/ });
+      if (await show.count()) {
+        await show.first().click();
+        await page.waitForTimeout(300);
+        const refundBtn = page.getByRole("button", { name: "Refund" });
+        if (await refundBtn.count()) {
+          await refundBtn.first().click();
+          await page.waitForTimeout(300);
+          const why = page.getByRole("button", { name: /Rung up wrong/ });
+          if (await why.count()) {
+            await why.first().click();
+            await page.waitForTimeout(300);
+          }
+          await page.screenshot({ path: `${OUT}/${vp.name}_closing_refund.png` });
+        }
+      }
+    }
+
     if (route === "/debts") {
       const chase = page.getByRole("button", { name: "Chase" });
       if (await chase.count()) {

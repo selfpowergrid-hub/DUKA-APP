@@ -2,7 +2,15 @@
 
 import { db, META_KEYS, metaGet } from "./db";
 import { businessDate } from "./format";
-import type { MovementReason, Product, Sale, SaleItem, Session } from "./types";
+import type {
+  MovementReason,
+  Product,
+  Refund,
+  RefundReason,
+  Sale,
+  SaleItem,
+  Session,
+} from "./types";
 
 /**
  * Reporting, computed entirely from IndexedDB.
@@ -131,6 +139,25 @@ export interface StockValue {
   items: number;
 }
 
+/**
+ * Refunds in the period, by reason.
+ *
+ * Void and refund exception reports sit near the top of every independent-retail
+ * loss-prevention guide, and this app could not produce one at all until sales
+ * became reversible. The reason codes are the point: a rising "returned" count
+ * is a pattern worth a conversation, and free text cannot be counted.
+ */
+export interface RefundSummary {
+  count: number;
+  /** Everything reversed, including credit reversals where no cash moved. */
+  total: number;
+  /** Cash actually handed back. This is the figure that left the drawer. */
+  cash: number;
+  byReason: Array<{ reason: RefundReason; count: number; amount: number }>;
+  /** Refunds as a share of gross sales. The number that should stay small. */
+  pctOfSales: number;
+}
+
 export interface PeriodReport {
   period: Period;
   sales: SalesTotals;
@@ -144,7 +171,30 @@ export interface PeriodReport {
   margin: MarginSummary;
   movements: MovementRow[];
   stock: StockValue;
+  refunds: RefundSummary;
   unsynced: number;
+}
+
+function summariseRefunds(rows: Refund[], grossSales: number): RefundSummary {
+  const byReason = new Map<RefundReason, { reason: RefundReason; count: number; amount: number }>();
+  for (const r of rows) {
+    const row = byReason.get(r.reason) ?? { reason: r.reason, count: 0, amount: 0 };
+    row.count += 1;
+    row.amount = round2(row.amount + r.amount);
+    byReason.set(r.reason, row);
+  }
+  const total = round2(rows.reduce((t, r) => t + r.amount, 0));
+  return {
+    count: rows.length,
+    total,
+    cash: round2(
+      rows.filter((r) => r.settled_as === "cash").reduce((t, r) => t + r.amount, 0),
+    ),
+    byReason: [...byReason.values()].sort((a, b) => b.amount - a.amount),
+    // Guarded: a period with refunds and no sales is possible (yesterday's sale
+    // reversed this morning) and must not read as Infinity.
+    pctOfSales: grossSales > 0 ? round2((total / grossSales) * 100) : 0,
+  };
 }
 
 function round2(n: number) {
@@ -191,13 +241,14 @@ export async function buildReport(kind: PeriodKind, endDate: string): Promise<Pe
   // which is fine at a few thousand rows and steadily worse after that — on a
   // cheap Android phone with a year of trade it means tens of thousands of
   // rows into memory every time the period changes.
-  const [sales, prevSales, products, counts, staff, session] = await Promise.all([
+  const [sales, prevSales, products, counts, staff, session, refunds] = await Promise.all([
     db.sales.where("business_date").anyOf(period.dates).toArray(),
     db.sales.where("business_date").anyOf(prev.dates).toArray(),
     db.products.toArray(),
     db.cash_counts.where("business_date").anyOf(period.dates).toArray(),
     db.staff.toArray(),
     metaGet<Session>(META_KEYS.session),
+    db.refunds.where("business_date").anyOf(period.dates).toArray(),
   ]);
 
   const saleIds = sales.map((s) => s.id);
@@ -359,6 +410,7 @@ export async function buildReport(kind: PeriodKind, endDate: string): Promise<Pe
     margin,
     movements: [...byReason.values()].sort((a, b) => a.reason.localeCompare(b.reason)),
     stock,
+    refunds: summariseRefunds(refunds, totalsOf(sales).total),
     unsynced: sales.filter((s) => !s.synced_at).length,
   };
 }

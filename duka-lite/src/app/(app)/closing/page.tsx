@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, META_KEYS } from "@/lib/db";
 import { dayTotals, saveCashCount } from "@/lib/store";
-import { Button, Input, Money, Notice } from "@/components/ui";
+import { Button, Input, Money, Notice, PaymentTag } from "@/components/ui";
+import { RefundSheet } from "@/components/refund-sheet";
 import { formatClock, formatDay, money, todayInNairobi } from "@/lib/format";
 import { useSession } from "@/components/session-provider";
 
@@ -15,9 +16,25 @@ export default function ClosingPage() {
   const [draft, setDraft] = useState<{ date: string; value: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shared, setShared] = useState<string | null>(null);
+  const [refunding, setRefunding] = useState<string | null>(null);
+  const [showSales, setShowSales] = useState(false);
   const { session } = useSession();
+  const isOwner = session?.role === "owner";
 
   const totals = useLiveQuery(() => dayTotals(date), [date]);
+  // The day's sales, so a mis-key can be reversed from the screen where it is
+  // actually noticed: the drawer disagrees and the owner comes looking here.
+  const daySales = useLiveQuery(
+    async () =>
+      (await db.sales.where("business_date").equals(date).toArray()).sort((a, b) =>
+        b.created_at.localeCompare(a.created_at),
+      ),
+    [date],
+  );
+  const refundedIds = useLiveQuery(
+    async () => new Set((await db.refunds.toArray()).map((r) => r.sale_id)),
+    [],
+  );
   const skew = useLiveQuery(
     async () => (await db.meta.get(META_KEYS.clockSkewMs))?.value as number | undefined,
     [],
@@ -64,6 +81,15 @@ export default function ClosingPage() {
           `  paid at till ${money(paidAtTill)}`,
           `  still owed   ${money(totals!.creditOutstanding)}`,
         );
+      }
+    }
+    if (totals!.refundedTotal > 0) {
+      lines.push(
+        "",
+        `Refunds:      -${money(totals!.refundedTotal)} (${totals!.refunds.length})`,
+      );
+      if (totals!.refundedCash > 0) {
+        lines.push(`  cash out    ${money(totals!.refundedCash)}`);
       }
     }
     if (totals!.repaidCash > 0 || totals!.repaidMpesa > 0) {
@@ -236,6 +262,99 @@ export default function ClosingPage() {
         </div>
       )}
 
+      {/* Refunds are their own line, never netted into sales. A single net
+          figure would hide exactly what the owner most wants to see. */}
+      {totals.refundedTotal > 0 && (
+        <div className="print-plain rounded-2xl border-2 border-danger/30 bg-danger-soft p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-danger">Reversed today</p>
+              <p className="tabular text-2xl font-bold text-danger">
+                -{money(totals.refundedTotal)}
+              </p>
+            </div>
+            <p className="text-sm text-danger">
+              {totals.refunds.length} {totals.refunds.length === 1 ? "sale" : "sales"}
+            </p>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            {totals.refundedCash > 0
+              ? `${money(totals.refundedCash)} handed back in cash, so the drawer should be ` +
+                "lower by that much."
+              : "No cash moved — a credit sale was reversed, so a debt dropped instead."}
+          </p>
+        </div>
+      )}
+
+      {/* The day's sales. Owner-only refunding, enforced by RLS as well as by
+          this button not being rendered. */}
+      {daySales && daySales.length > 0 && (
+        <div className="no-print rounded-2xl border border-line bg-surface p-4">
+          <button
+            onClick={() => setShowSales((v) => !v)}
+            className="flex min-h-12 w-full items-baseline justify-between text-left"
+          >
+            <span className="text-lg font-bold">
+              Sales this day <span className="font-normal text-muted">({daySales.length})</span>
+            </span>
+            <span className="text-sm text-brand-dark underline">
+              {showSales ? "Hide" : isOwner ? "Show / refund" : "Show"}
+            </span>
+          </button>
+
+          {showSales && (
+            <ul className="mt-2 flex flex-col divide-y divide-line">
+              {daySales.map((sale) => {
+                const done = refundedIds?.has(sale.id) ?? false;
+                return (
+                  <li key={sale.id} className="py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="tabular font-semibold">
+                          {money(sale.total)}
+                          {done && (
+                            <span className="ml-2 text-sm font-normal text-danger">reversed</span>
+                          )}
+                        </p>
+                        <p className="text-sm text-muted">
+                          {formatClock(sale.created_at)}
+                          {sale.mpesa_code && ` · ${sale.mpesa_code}`}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <PaymentTag method={sale.payment_method} />
+                        {isOwner && !done && (
+                          <Button
+                            variant="neutral"
+                            className="min-h-12 px-3 text-sm"
+                            onClick={() =>
+                              setRefunding(refunding === sale.id ? null : sale.id)
+                            }
+                          >
+                            Refund
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {refunding === sale.id && !done && (
+                      <div className="mt-3">
+                        <RefundSheet sale={sale} onClose={() => setRefunding(null)} />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {showSales && !isOwner && (
+            <p className="mt-2 text-sm text-muted">
+              Only the owner can reverse a sale. If one of these is wrong, tell them which.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Cash count */}
       <div className="print-plain rounded-2xl border border-line bg-surface p-4">
         <h2 className="text-lg font-bold">Count the drawer</h2>
@@ -245,6 +364,8 @@ export default function ClosingPage() {
             ` Expected includes ${money(totals.repaidCash)} of old debt repaid in cash.`}
           {totals.paidAtTillCash > 0 &&
             ` It also includes ${money(totals.paidAtTillCash)} paid in cash at the counter on credit sales.`}
+          {totals.refundedCash > 0 &&
+            ` ${money(totals.refundedCash)} was handed back on a refund, so expected is lower by that much.`}
         </p>
 
         <Input

@@ -75,6 +75,8 @@ export interface CustomerDebt {
   totalCharged: number;
   totalPaid: number;
   totalWrittenOff: number;
+  /** Charges cancelled because the goods came back. Not a loss. */
+  totalReversed: number;
   lastPaymentAt: string | null;
   /** True when a limit is set and the balance is at or past it. */
   overLimit: boolean;
@@ -129,8 +131,11 @@ export function allocate(entries: DebtEntry[], now: Date = new Date()): {
       }
       charges.push({ entry: e, remaining });
     } else {
-      // Payments and write-offs both reduce what is owed; only their meaning
-      // to the owner differs, and that is preserved in the ledger itself.
+      // Payments, write-offs and reversals all reduce what is owed; only their
+      // meaning to the owner differs, and that is preserved in the ledger
+      // itself. A reversal is deliberately NOT counted as written off — goods
+      // coming back is not a loss, and folding it in would inflate the bad-debt
+      // figure the Debts screen exists to keep honest.
       let left = e.amount;
       for (const c of charges) {
         if (left <= 0) break;
@@ -179,6 +184,9 @@ export function summarise(
     totalPaid: round2(payments.reduce((t, e) => t + e.amount, 0)),
     totalWrittenOff: round2(
       entries.filter((e) => e.kind === "writeoff").reduce((t, e) => t + e.amount, 0),
+    ),
+    totalReversed: round2(
+      entries.filter((e) => e.kind === "reversal").reduce((t, e) => t + e.amount, 0),
     ),
     lastPaymentAt: payments.length ? sortLedger(payments).slice(-1)[0].created_at : null,
     overLimit:

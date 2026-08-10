@@ -28,6 +28,8 @@ const MIGRATIONS = [
   "0007a_credit_enum.sql",
   "0007b_customer_debt.sql",
   "0008_debt_lifecycle.sql",
+  "0009a_refund_enums.sql",
+  "0009b_refunds.sql",
 ];
 
 const db = new PGlite();
@@ -837,6 +839,279 @@ const otherSees = (
 ).rows[0].c;
 await db.exec("reset role;");
 expect("another shop cannot see these reminders", Number(otherSees) === 0, `c=${otherSees}`);
+
+// =========================================================================
+// 0009 — refunds
+// =========================================================================
+// A cash sale to reverse. Its own product so the stock assertions are exact.
+const refProd = (
+  await q(
+    `insert into public.products (shop_id, name, unit, buying_price, selling_price)
+     values ($1,'Soap bar refund test','pc',20,30) returning id`,
+    [shop],
+  )
+).rows[0].id;
+await q(
+  `insert into public.stock_movements (id, shop_id, product_id, user_id, delta, reason, buying_price, created_at)
+   values (gen_random_uuid(), $1, $2, $3, 50, 'restock', 20, now())`,
+  [shop, refProd, owner],
+);
+
+const refSaleId = "0900cafe-0000-4000-8000-000000000001";
+await as(owner, () =>
+  q("select public.sync_sale($1::jsonb, $2::jsonb, $3::jsonb)", [
+    JSON.stringify({
+      id: refSaleId,
+      total: 90,
+      payment_method: "cash",
+      amount_tendered: 100,
+      business_date: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    }),
+    JSON.stringify([
+      {
+        id: "0900cafe-0000-4000-8000-000000000002",
+        product_id: refProd,
+        product_name: "Soap bar refund test",
+        unit_price: 30,
+        quantity: 3,
+        line_total: 90,
+      },
+    ]),
+    JSON.stringify([
+      {
+        id: "0900cafe-0000-4000-8000-000000000003",
+        product_id: refProd,
+        delta: -3,
+        created_at: new Date().toISOString(),
+      },
+    ]),
+  ]),
+);
+await db.exec("reset role;");
+
+const qtyAfterSale = Number(
+  (await q("select quantity from public.products where id=$1", [refProd])).rows[0].quantity,
+);
+expect("the sale to be reversed left stock at 47", qtyAfterSale === 47, `qty=${qtyAfterSale}`);
+
+const refundId = "0900cafe-0000-4000-8000-000000000010";
+const refundPayload = {
+  id: refundId,
+  sale_id: refSaleId,
+  amount: 90,
+  settled_as: "cash",
+  reason: "returned",
+  note: null,
+  business_date: new Date().toISOString().slice(0, 10),
+  created_at: new Date().toISOString(),
+};
+const refundMovements = [
+  {
+    id: "0900cafe-0000-4000-8000-000000000011",
+    product_id: refProd,
+    delta: 3,
+    reason: "return",
+    created_at: new Date().toISOString(),
+  },
+];
+const callRefund = () =>
+  as(owner, () =>
+    q("select public.sync_refund($1::jsonb, $2::jsonb)", [
+      JSON.stringify(refundPayload),
+      JSON.stringify(refundMovements),
+    ]),
+  );
+
+await callRefund();
+await db.exec("reset role;");
+const qtyAfterRefund = Number(
+  (await q("select quantity from public.products where id=$1", [refProd])).rows[0].quantity,
+);
+expect("a refund puts the stock back", qtyAfterRefund === 50, `qty=${qtyAfterRefund}`);
+
+// The headline claim, same as for sync_sale: replaying must never double.
+// Putting the stock back twice would be an invented three items of inventory.
+await callRefund();
+await callRefund();
+await db.exec("reset role;");
+const replayed = (
+  await q(
+    `select (select count(*) from public.refunds where id=$1) as refunds,
+            (select count(*) from public.stock_movements where reason='return' and sale_id=$2) as moves,
+            (select quantity from public.products where id=$3) as qty`,
+    [refundId, refSaleId, refProd],
+  )
+).rows[0];
+expect(
+  "replaying a refund doubles nothing",
+  Number(replayed.refunds) === 1 &&
+    Number(replayed.moves) === 1 &&
+    Number(replayed.qty) === 50,
+  JSON.stringify(replayed),
+);
+
+// Whole-sale-only, expressed in the database. This is also what blocks
+// refunding the same sale twice and keeping the second payout.
+let secondRefund = false;
+try {
+  await as(owner, () =>
+    q("select public.sync_refund($1::jsonb, $2::jsonb)", [
+      JSON.stringify({ ...refundPayload, id: "0900cafe-0000-4000-8000-000000000012" }),
+      JSON.stringify([]),
+    ]),
+  );
+} catch {
+  secondRefund = true;
+}
+await db.exec("reset role;");
+expect("a sale cannot be refunded twice", secondRefund);
+
+// --- owner only ------------------------------------------------------------
+const attSaleId = "0900cafe-0000-4000-8000-000000000020";
+await as(att, () =>
+  q("select public.sync_sale($1::jsonb, $2::jsonb, $3::jsonb)", [
+    JSON.stringify({
+      id: attSaleId,
+      total: 30,
+      payment_method: "cash",
+      amount_tendered: 30,
+      business_date: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    }),
+    JSON.stringify([]),
+    JSON.stringify([]),
+  ]),
+);
+await db.exec("reset role;");
+
+await db.exec("set role authenticated;");
+let attRefund = false;
+try {
+  await as(att, () =>
+    q("select public.sync_refund($1::jsonb, $2::jsonb)", [
+      JSON.stringify({
+        id: "0900cafe-0000-4000-8000-000000000021",
+        sale_id: attSaleId,
+        amount: 30,
+        settled_as: "cash",
+        reason: "mis_key",
+        business_date: new Date().toISOString().slice(0, 10),
+        created_at: new Date().toISOString(),
+      }),
+      JSON.stringify([]),
+    ]),
+  );
+} catch {
+  attRefund = true;
+}
+await db.exec("reset role;");
+expect("an attendant cannot refund a sale", attRefund);
+
+// A refund is append-only like everything else: "I reversed 4,000" must not be
+// editable into "I reversed 400" after the cash has gone.
+await db.exec("set role authenticated;");
+let refUpdate = false;
+try {
+  await as(owner, () => q("update public.refunds set amount = 1 where id=$1", [refundId]));
+} catch {
+  refUpdate = true;
+}
+let refDelete = false;
+try {
+  await as(owner, () => q("delete from public.refunds where id=$1", [refundId]));
+} catch {
+  refDelete = true;
+}
+await db.exec("reset role;");
+expect("a refund cannot be edited", refUpdate);
+expect("a refund cannot be deleted", refDelete);
+
+// --- the money rule: a credit sale is reversed, never paid out in cash -----
+const credRefSale = "0900cafe-0000-4000-8000-000000000030";
+await as(owner, () =>
+  q("select public.sync_sale($1::jsonb, $2::jsonb, $3::jsonb)", [
+    JSON.stringify({
+      id: credRefSale,
+      total: 250,
+      payment_method: "credit",
+      customer_id: wanjiku,
+      debt_entry_id: "0900cafe-0000-4000-8000-000000000031",
+      business_date: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    }),
+    JSON.stringify([]),
+    JSON.stringify([]),
+  ]),
+);
+await db.exec("reset role;");
+
+let cashOutOnCredit = false;
+try {
+  await as(owner, () =>
+    q("select public.sync_refund($1::jsonb, $2::jsonb)", [
+      JSON.stringify({
+        id: "0900cafe-0000-4000-8000-000000000032",
+        sale_id: credRefSale,
+        amount: 250,
+        settled_as: "cash",
+        reason: "returned",
+        business_date: new Date().toISOString().slice(0, 10),
+        created_at: new Date().toISOString(),
+      }),
+      JSON.stringify([]),
+    ]),
+  );
+} catch {
+  cashOutOnCredit = true;
+}
+await db.exec("reset role;");
+expect(
+  "handing cash back for goods that were never paid for is refused",
+  cashOutOnCredit,
+);
+
+await as(owner, () =>
+  q("select public.sync_refund($1::jsonb, $2::jsonb)", [
+    JSON.stringify({
+      id: "0900cafe-0000-4000-8000-000000000033",
+      sale_id: credRefSale,
+      amount: 250,
+      settled_as: "credit",
+      reason: "returned",
+      debt_entry_id: "0900cafe-0000-4000-8000-000000000034",
+      business_date: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    }),
+    JSON.stringify([]),
+  ]),
+);
+await db.exec("reset role;");
+const reversalRow = (
+  await q(
+    "select kind, amount from public.debt_entries where id=$1",
+    ["0900cafe-0000-4000-8000-000000000034"],
+  )
+).rows[0];
+expect(
+  "reversing a credit sale writes a reversal, not a writeoff",
+  reversalRow?.kind === "reversal" && Number(reversalRow.amount) === 250,
+  JSON.stringify(reversalRow),
+);
+
+// A reversal must point at its sale; a writeoff must not. Keeping them apart
+// in the constraint is what stops a reversal being counted as bad debt.
+let reversalNoSale = false;
+try {
+  await q(
+    `insert into public.debt_entries (id, shop_id, customer_id, user_id, kind, amount, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, $3, 'reversal', 100, current_date, now())`,
+    [shop, wanjiku, owner],
+  );
+} catch {
+  reversalNoSale = true;
+}
+expect("a reversal with no sale attached is rejected", reversalNoSale);
 
 // --- weighted-average cost ------------------------------------------------
 // The scenario the old "latest cost" behaviour got wrong: buy cheap, then buy

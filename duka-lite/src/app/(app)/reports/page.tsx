@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { buildReport, comparisonLabel, type PeriodKind } from "@/lib/reports";
 import { chaseList, debtTotals, AGE_BUCKETS } from "@/lib/debt";
+import { REFUND_REASONS } from "@/lib/types";
 import { Button, Money, Notice } from "@/components/ui";
 import { formatDay, money, qty, todayInNairobi } from "@/lib/format";
 import { MOVEMENT_LABELS } from "@/lib/types";
@@ -510,6 +511,50 @@ export default function ReportsPage() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* The exception report the app could not produce until sales became
+              reversible. Shown whenever there is anything to show, including a
+              clean zero after the first refund of the period — a refund rate
+              you never look at is a refund rate nobody is controlling. */}
+          {report.refunds.count > 0 && (
+            <div className="rounded-2xl border border-line bg-surface p-4">
+              <div className="flex items-baseline justify-between">
+                <h2 className="text-lg font-bold">Refunds</h2>
+                <span className="tabular text-sm text-muted">
+                  {report.refunds.pctOfSales}% of sales
+                </span>
+              </div>
+              <p className="tabular mt-1 text-3xl font-bold text-danger">
+                -{money(report.refunds.total)}
+              </p>
+              <p className="text-sm text-muted">
+                {report.refunds.count} {report.refunds.count === 1 ? "sale" : "sales"} reversed
+                {report.refunds.cash > 0 && ` · ${money(report.refunds.cash)} handed back in cash`}
+              </p>
+
+              <ul className="mt-3 flex flex-col divide-y divide-line border-t border-line">
+                {report.refunds.byReason.map((r) => (
+                  <li key={r.reason} className="flex items-center justify-between gap-2 py-2">
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold">
+                        {REFUND_REASONS.find((x) => x.key === r.reason)?.label ?? r.reason}
+                      </span>
+                      <span className="text-sm text-muted">
+                        {r.count} {r.count === 1 ? "time" : "times"}
+                      </span>
+                    </span>
+                    <span className="tabular shrink-0 font-bold">{money(r.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+
+              <p className="mt-3 text-sm text-muted">
+                Only the owner can reverse a sale, so every one of these carries your name. What
+                is worth watching is the shape over time: a climbing count on one reason is a
+                pattern, and a single refund is not.
+              </p>
             </div>
           )}
 

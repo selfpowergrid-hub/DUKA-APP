@@ -199,6 +199,12 @@ function CustomerDebtScreen() {
             <dt className="text-muted">Paid back</dt>
             <dd className="tabular">{money(debt.totalPaid)}</dd>
           </div>
+          {debt.totalReversed > 0 && (
+            <div className="flex justify-between">
+              <dt className="text-muted">Returned goods</dt>
+              <dd className="tabular">{money(debt.totalReversed)}</dd>
+            </div>
+          )}
           {debt.totalWrittenOff > 0 && (
             <div className="flex justify-between">
               <dt className="text-muted">Written off</dt>
@@ -306,7 +312,9 @@ function CustomerDebtScreen() {
                       ? "Took goods on credit"
                       : entry.kind === "payment"
                         ? `Paid ${entry.payment_method === "mpesa" ? "by M-Pesa" : "cash"}`
-                        : "Written off"}
+                        : entry.kind === "reversal"
+                          ? "Goods returned — charge cancelled"
+                          : "Written off"}
                   </p>
                   <p className="text-sm text-muted">
                     {formatDay(entry.business_date)}

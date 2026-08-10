@@ -5,7 +5,13 @@
 export type PaymentMethod = "cash" | "mpesa" | "credit";
 /** What a repayment can actually arrive as. Credit cannot repay credit. */
 export type RepaymentMethod = "cash" | "mpesa";
-export type DebtEntryKind = "charge" | "payment" | "writeoff";
+/**
+ * `reversal` is deliberately NOT `writeoff`. A write-off is a loss the owner
+ * chose to absorb; a reversal is goods coming back, which is not a loss at
+ * all. Recording one as the other would inflate the bad-debt figure on the
+ * very screen built to make that figure honest.
+ */
+export type DebtEntryKind = "charge" | "payment" | "writeoff" | "reversal";
 /**
  * A unit is just its code now — "pc", "litre", "gunia". It used to be a
  * Postgres enum, which meant a schema change and a redeploy every time a shop
@@ -18,7 +24,9 @@ export type MovementReason =
   | "opening"
   | "adjustment"
   | "damage"
-  | "loss";
+  | "loss"
+  /** Goods coming back on a refund. Not `restock` — that is a purchase. */
+  | "return";
 export type UserRole = "owner" | "attendant";
 
 /** The reasons a human can pick on the adjustment screen. */
@@ -62,6 +70,7 @@ export const MOVEMENT_LABELS: Record<MovementReason, string> = {
   adjustment: "Recount",
   damage: "Damaged",
   loss: "Lost or stolen",
+  return: "Returned",
 };
 
 /** A shop member, pulled so reports can name who rang up what. */
@@ -117,6 +126,59 @@ export interface DebtReminder {
   /** "nitalipa Ijumaa" — what turns a list into a work queue. */
   promised_date: string | null;
   note: string | null;
+  created_at: string;
+  synced_at: string | null;
+}
+
+/** Why a sale was reversed. A code, not free text, so it can be counted. */
+export type RefundReason = "mis_key" | "returned" | "damaged";
+
+export const REFUND_REASONS: Array<{
+  key: RefundReason;
+  label: string;
+  hint: string;
+  /** Do the goods come back sellable? `damaged` returns them, then writes off. */
+  sellable: boolean;
+}> = [
+  {
+    key: "mis_key",
+    label: "Rung up wrong",
+    hint: "Nothing left the shop — the sale itself was the mistake",
+    sellable: true,
+  },
+  {
+    key: "returned",
+    label: "Customer brought it back",
+    hint: "Goods are fine and go back on the shelf",
+    sellable: true,
+  },
+  {
+    key: "damaged",
+    label: "Brought back damaged",
+    hint: "Goods come back but cannot be sold — recorded as damage too",
+    sellable: false,
+  },
+];
+
+/**
+ * A reversed sale. The sale itself is never edited or deleted; this is a new
+ * record that points at it.
+ */
+export interface Refund {
+  id: string;
+  shop_id: string;
+  sale_id: string;
+  user_id: string;
+  amount: number;
+  /**
+   * Where the money PHYSICALLY went back, which is not how the sale was paid.
+   * An M-Pesa sale settles as "cash" — there is no Daraja, so the app cannot
+   * send M-Pesa and says so instead of pretending.
+   */
+  settled_as: "cash" | "credit";
+  reason: RefundReason;
+  note: string | null;
+  business_date: string;
   created_at: string;
   synced_at: string | null;
 }
@@ -264,7 +326,9 @@ export type OutboxKind =
   | "customer"
   /** A repayment or write-off. Charges ride with their sale, never alone. */
   | "debt_entry"
-  | "reminder";
+  | "reminder"
+  /** A reversed sale: the refund, its stock movements and any debt reversal. */
+  | "refund";
 
 /**
  * Outbox kinds that represent money. Discarding one of these means a sale or a
@@ -272,7 +336,7 @@ export type OutboxKind =
  * device it simply does not exist. They are archived, never deleted, and the
  * confirmation names the amount.
  */
-export const MONEY_KINDS: OutboxKind[] = ["sale", "debt_entry"];
+export const MONEY_KINDS: OutboxKind[] = ["sale", "debt_entry", "refund"];
 
 /**
  * An outbox entry the shop gave up on sending.

@@ -138,6 +138,10 @@ export function describeEntry(entry: OutboxEntry): string {
       return "Product measures";
     case "reminder":
       return "A debt reminder";
+    case "refund": {
+      const r = p.refund as { amount?: number; reason?: string } | undefined;
+      return `Refund of KES ${Math.round(Number(r?.amount ?? 0)).toLocaleString("en-KE")}`;
+    }
   }
 }
 
@@ -308,6 +312,15 @@ async function pushEntry(entry: OutboxEntry): Promise<void> {
       if (error) throw new Error(error.message);
       return;
     }
+    case "refund": {
+      const body = payload as { refund: unknown; movements: unknown };
+      const { error } = await sb.rpc("sync_refund", {
+        p_refund: body.refund,
+        p_movements: body.movements,
+      });
+      if (error) throw new Error(error.message);
+      return;
+    }
     case "portions": {
       // Replace-all in one server transaction, so a portion removed offline
       // cannot survive on the server.
@@ -366,6 +379,12 @@ export function describeSyncError(message: string): string {
   if (m.includes("duplicate key value violates unique constraint")) {
     if (m.includes("products_shop_name_unique")) return "A product with this name already exists.";
     if (m.includes("categories_shop_name_unique")) return "A category with this name already exists.";
+    if (m.includes("refunds_one_per_sale")) {
+      return "That sale was already refunded, most likely on another device.";
+    }
+    if (m.includes("only an owner can refund")) {
+      return "Only the owner can refund a sale. Ask them to do it on their phone.";
+    }
     if (m.includes("units_shop_code_unique")) return "This unit already exists.";
     return "Something with the same name already exists.";
   }
@@ -481,7 +500,7 @@ async function pullRecentActivity(session: Session) {
   // Movements are keyed by created_at, not business_date.
   const sinceTs = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString();
 
-  const [sales, counts, movements, debts, reminders] = await Promise.all([
+  const [sales, counts, movements, debts, reminders, refunds] = await Promise.all([
     sb.from("sales").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     sb.from("cash_counts").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     // Movements used to be pushed and never pulled back, which made the shrink
@@ -504,11 +523,24 @@ async function pullRecentActivity(session: Session) {
     // windowed: "when did we last chase this person" is exactly the question
     // that matters most about an old debt.
     sb.from("debt_reminders").select("*").eq("shop_id", session.shop_id),
+    // Refunds are windowed with the rest of the activity: a refund older than
+    // the history window belongs to a sale this device no longer holds.
+    sb.from("refunds").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
   ]);
   if (sales.error) throw new Error(sales.error.message);
   if (counts.error) throw new Error(counts.error.message);
   if (movements.error) throw new Error(movements.error.message);
   if (debts.error) throw new Error(debts.error.message);
+  if (!refunds.error && refunds.data?.length) {
+    const pendingRefundIds = new Set(
+      (await db.outbox.where("kind").equals("refund").toArray()).map((e) => e.entity_id),
+    );
+    await db.refunds.bulkPut(
+      (refunds.data as Array<Record<string, unknown>>).filter(
+        (r) => !pendingRefundIds.has(r.id as string),
+      ) as never,
+    );
+  }
   if (!reminders.error && reminders.data?.length) {
     const pendingReminderIds = new Set(
       (await db.outbox.where("kind").equals("reminder").toArray()).map((e) => e.entity_id),

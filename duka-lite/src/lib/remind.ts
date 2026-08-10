@@ -133,7 +133,9 @@ export function statementText(
         ? "Goods on credit"
         : e.kind === "payment"
           ? `Paid (${e.payment_method === "mpesa" ? `M-Pesa ${e.mpesa_code ?? ""}`.trim() : "cash"})`
-          : "Written off";
+          : e.kind === "reversal"
+            ? "Goods returned"
+            : "Written off";
     const sign = e.kind === "charge" ? "+" : "-";
     return `${formatDate(e.business_date)}  ${sign}${money(e.amount)}  ${what}`;
   });

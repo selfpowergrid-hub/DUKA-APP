@@ -34,6 +34,9 @@ const REASON_TONE: Record<MovementReason, string> = {
   adjustment: "text-brand-dark",
   damage: "text-danger",
   loss: "text-danger",
+  // Stock coming back reads like a restock, because that is what it is to the
+  // shelf — the money side of a refund is Closing's job, not this screen's.
+  return: "text-cash-dark",
 };
 
 function StockHistory() {

@@ -12,7 +12,7 @@
  * Run: npm run test:offline
  */
 import "fake-indexeddb/auto";
-import { db, META_KEYS, metaSet } from "../src/lib/db";
+import { db, META_KEYS, metaGet, metaSet } from "../src/lib/db";
 import {
   checkout,
   dayTotals,
@@ -1578,6 +1578,182 @@ async function main() {
   expect(
     "re-queueing puts it back where it belongs",
     (await db.discarded.count()) === 0 && (await db.outbox.count()) === beforeDiscard,
+  );
+
+  // =======================================================================
+  // Refunds — reversing a sale without editing it
+  // =======================================================================
+  const { refundSale, refundedSaleIds } = await import("../src/lib/store");
+
+  const refProd = await saveProduct({
+    name: "Blue Band 250g",
+    unit: "pc",
+    buying_price: 180,
+    selling_price: 220,
+    low_stock_threshold: 2,
+    opening_quantity: 30,
+  });
+
+  const stockBeforeRefund = await stockOf(refProd.id);
+  const beforeRefund = await dayTotals(businessDate());
+  const refCashSale = await checkout({
+    lines: [
+      { product_id: refProd.id, name: refProd.name, unit: "pc", unit_price: 220, quantity: 2 },
+    ],
+    payment_method: "cash",
+    amount_tendered: 500,
+  });
+
+  const refund = await refundSale({ sale_id: refCashSale.id, reason: "mis_key" });
+  const afterRefund = await dayTotals(businessDate());
+
+  expect("a refund reverses the whole sale", refund.amount === 440, `${refund.amount}`);
+  expect(
+    "the goods come back on the shelf",
+    (await stockOf(refProd.id)) === stockBeforeRefund,
+    `${await stockOf(refProd.id)} vs ${stockBeforeRefund}`,
+  );
+
+  // THE claim. A mis-keyed sale used to leave the drawer reading short by
+  // exactly the mistake, which is indistinguishable from theft.
+  expect(
+    "expected cash returns to where it was before the mistake",
+    afterRefund.expectedCash === beforeRefund.expectedCash,
+    `${afterRefund.expectedCash} vs ${beforeRefund.expectedCash}`,
+  );
+  expect(
+    "the sale itself is untouched — nothing is deleted or edited",
+    (await db.sales.get(refCashSale.id))?.total === 440,
+  );
+  expect(
+    "gross sales still include it; the refund is a separate line",
+    afterRefund.total - beforeRefund.total === 440 && afterRefund.refundedTotal === 440,
+    `total+${afterRefund.total - beforeRefund.total} refunds=${afterRefund.refundedTotal}`,
+  );
+  expect(
+    "everything rides in one outbox entry",
+    (await db.outbox.where("entity_id").equals(refund.id).count()) === 1,
+  );
+  expect("refundedSaleIds marks the sale", (await refundedSaleIds()).has(refCashSale.id));
+
+  let twice = false;
+  try {
+    await refundSale({ sale_id: refCashSale.id, reason: "returned" });
+  } catch {
+    twice = true;
+  }
+  expect("the same sale cannot be refunded twice", twice);
+
+  // --- an M-Pesa sale is refunded in CASH -----------------------------------
+  const beforeMpesaRefund = await dayTotals(businessDate());
+  const refMpesaSale = await checkout({
+    lines: [
+      { product_id: refProd.id, name: refProd.name, unit: "pc", unit_price: 220, quantity: 1 },
+    ],
+    payment_method: "mpesa",
+    mpesa_code: "RKX8M2P4QN",
+  });
+  const midMpesa = await dayTotals(businessDate());
+  await refundSale({ sale_id: refMpesaSale.id, reason: "returned" });
+  const afterMpesaRefund = await dayTotals(businessDate());
+
+  // The app has no Daraja and cannot send M-Pesa, so the money leaves the
+  // DRAWER. Taking it off expected M-Pesa instead would leave the drawer
+  // reading over by 220 and the Safaricom statement disagreeing.
+  expect(
+    "refunding an M-Pesa sale takes cash out of the drawer",
+    afterMpesaRefund.expectedCash === beforeMpesaRefund.expectedCash - 220,
+    `${afterMpesaRefund.expectedCash} vs ${beforeMpesaRefund.expectedCash}`,
+  );
+  expect(
+    "...and leaves expected M-Pesa exactly where the sale put it",
+    afterMpesaRefund.expectedMpesa === midMpesa.expectedMpesa,
+    `${afterMpesaRefund.expectedMpesa} vs ${midMpesa.expectedMpesa}`,
+  );
+
+  // --- damaged goods come back AND are written off --------------------------
+  const dmgBefore = await stockOf(refProd.id);
+  const dmgSale = await checkout({
+    lines: [
+      { product_id: refProd.id, name: refProd.name, unit: "pc", unit_price: 220, quantity: 2 },
+    ],
+    payment_method: "cash",
+    amount_tendered: 440,
+  });
+  await refundSale({ sale_id: dmgSale.id, reason: "damaged" });
+
+  expect(
+    "damaged goods leave sellable stock unchanged",
+    (await stockOf(refProd.id)) === dmgBefore - 2,
+    `${await stockOf(refProd.id)} vs ${dmgBefore - 2}`,
+  );
+  // Two movements, not a silent no-op: the shrink report needs the damage half,
+  // and "the goods came back" is a separate fact worth keeping.
+  const dmgMoves = (await db.stock_movements.toArray()).filter((m) => m.sale_id === dmgSale.id);
+  expect(
+    "it is recorded as a return AND a damage, not as nothing",
+    dmgMoves.some((m) => m.reason === "return" && m.delta === 2) &&
+      dmgMoves.some((m) => m.reason === "damage" && m.delta === -2),
+    dmgMoves.map((m) => `${m.reason}:${m.delta}`).join(", "),
+  );
+
+  // --- a credit sale is REVERSED, not paid out ------------------------------
+  const { customerDebt: debtOf } = await import("../src/lib/debt");
+  const mwangi = await saveCustomer({ name: "Mwangi", phone: "0711333555" });
+  const creditForRefund = await checkout({
+    lines: [
+      { product_id: refProd.id, name: refProd.name, unit: "pc", unit_price: 220, quantity: 3 },
+    ],
+    payment_method: "credit",
+    customer_id: mwangi.id,
+  });
+  expect("the credit sale creates the debt", (await debtOf(mwangi.id))?.balance === 660);
+
+  const beforeCreditRefund = await dayTotals(businessDate());
+  const creditRefund = await refundSale({ sale_id: creditForRefund.id, reason: "returned" });
+  const afterCreditRefund = await dayTotals(businessDate());
+
+  expect("a credit refund settles as credit, not cash", creditRefund.settled_as === "credit");
+  expect(
+    "reversing a credit sale moves NO cash",
+    afterCreditRefund.expectedCash === beforeCreditRefund.expectedCash,
+    `${afterCreditRefund.expectedCash} vs ${beforeCreditRefund.expectedCash}`,
+  );
+  const afterReversal = await debtOf(mwangi.id);
+  expect("the debt drops instead", afterReversal?.balance === 0, `${afterReversal?.balance}`);
+  // The reason `reversal` exists as its own kind: goods coming back is not a
+  // loss, and counting it as one would inflate the bad-debt figure the Debts
+  // screen exists to keep honest.
+  expect(
+    "and it is recorded as a reversal, NOT as a write-off",
+    afterReversal?.totalReversed === 660 && afterReversal?.totalWrittenOff === 0,
+    `reversed=${afterReversal?.totalReversed} writtenOff=${afterReversal?.totalWrittenOff}`,
+  );
+
+  // --- an attendant cannot refund -------------------------------------------
+  const ownerSession = (await metaGet<Session>(META_KEYS.session))!;
+  await metaSet(META_KEYS.session, { ...ownerSession, role: "attendant" });
+  const attSale = await checkout({
+    lines: [
+      { product_id: refProd.id, name: refProd.name, unit: "pc", unit_price: 220, quantity: 1 },
+    ],
+    payment_method: "cash",
+    amount_tendered: 220,
+  });
+  let attBlocked = false;
+  try {
+    await refundSale({ sale_id: attSale.id, reason: "mis_key" });
+  } catch {
+    attBlocked = true;
+  }
+  await metaSet(META_KEYS.session, ownerSession);
+  expect("an attendant cannot refund a sale", attBlocked);
+
+  // --- a refund is money, so it is never silently discarded -----------------
+  const refundEntry = (await db.outbox.where("kind").equals("refund").toArray())[0];
+  expect(
+    "a refund counts as money in the outbox",
+    refundEntry != null && isMoneyEntry(refundEntry),
   );
 
   // --- a past day is empty, and today's figures are untouched -------------

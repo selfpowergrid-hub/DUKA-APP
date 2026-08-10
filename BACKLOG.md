@@ -11,7 +11,11 @@ them — see the notes under each.
 
 ## 1. Returns and refunds
 
-**Status:** agreed for next. Not built.
+**Status: BUILT.** See the "Refunds" section of `duka-lite/README.md`, and `REFUNDS-PLAN.md`
+for the four decisions that shaped it. Shipped as migration `0009a`/`0009b`: an append-only
+`refunds` table, owner-only by RLS, whole-sale-only by `unique (sale_id)`, with an M-Pesa sale
+refunded in cash and a credit sale reversed rather than paid out. The notes below are kept as
+the record of what was decided and why.
 
 ### Why it matters more than it looks
 
@@ -46,11 +50,18 @@ no concept of a void. A whole category of loss-prevention reporting is unavailab
   up front whether v1 of this is whole-sale-only.
 - **Who may refund?** Owner-only is safest to start. RLS enforces it.
 
-### Open question
+### Open question — now answered
 
 Cash refund out of the drawer is straightforward. **An M-Pesa refund is not** — the money went
-to a phone and this app has no Daraja integration by design. The likely answer is that an M-Pesa
-sale is refunded in cash and the screen says so explicitly, but that is a business decision.
+to a phone and this app has no Daraja integration by design.
+
+**Answered: an M-Pesa sale is refunded in cash, and the screen says so explicitly.** Expected
+cash drops, expected M-Pesa is untouched. The alternative — recording an M-Pesa transfer the app
+cannot verify happened — is the same gap the manually-typed confirmation code exists to avoid.
+
+Two further questions were raised and answered at the same time: **owner-only** refunds, enforced
+by RLS rather than by hiding a button; and **whole-sale-only**, which per-line refunds can extend
+later without changing the data shape.
 
 ---
 
@@ -137,19 +148,20 @@ explicit that this is weaker, circumstantial evidence.
 
 ## Ordering when we pick these up
 
-Debt is now built, so two remain.
+Debt and refunds are now both built, so one remains.
 
-**Refunds first.** It closes a live correctness hole: a mis-keyed sale reads as a shortfall for
+**~~Refunds first.~~ Done.** It closes a live correctness hole: a mis-keyed sale reads as a shortfall for
 ever, and the owner cannot tell that shortfall from theft — the app's central question answered
 wrongly. It is also now cheaper than it was: the debt work established the pattern a refund
 needs (an append-only correction that points at the original, shown as its own line at Closing
 rather than netted into sales), and `debt_entries` already proves that a second money ledger can
 sit alongside sales without confusing the drawer.
 
-One thing the debt build adds to the refund design: **a refund against a credit sale is not a
-cash movement at all** — it is a `writeoff`-shaped reversal of the charge. That case has to be
-decided before the screen is drawn, or the first attendant to hit it will refund cash for goods
-that were never paid for.
+That prediction held, with one correction worth recording: a refund against a credit sale is
+indeed not a cash movement, but it is **not** `writeoff`-shaped either. It needed its own kind,
+`reversal`, because a write-off is a loss the owner absorbed and a reversal is goods coming back.
+Folding them together would have inflated the bad-debt figure the Debts screen exists to keep
+honest — the same class of mistake as booking a credit sale as cash, one level up.
 
-Then **shift counts**, which changes how attendants work day to day and so deserves to be
+**Shift counts** is what remains. It changes how attendants work day to day and so deserves to be
 decided with a real shopkeeper in front of it.

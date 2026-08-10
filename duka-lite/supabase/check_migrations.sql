@@ -97,6 +97,22 @@ with checks as (
      and exists (select 1 from pg_proc p
                    join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname='public' and p.proname='sync_debt_reminder')
+
+  union all
+  select '0009a_refund_enums', 'movement reason: return, debt kind: reversal',
+         exists (select 1 from pg_enum e
+                   join pg_type t on t.oid = e.enumtypid
+                  where t.typname = 'movement_reason' and e.enumlabel = 'return')
+     and exists (select 1 from pg_enum e
+                   join pg_type t on t.oid = e.enumtypid
+                  where t.typname = 'debt_entry_kind' and e.enumlabel = 'reversal')
+
+  union all
+  select '0009b_refunds', 'refunds table, owner-only, sync_refund',
+         to_regclass('public.refunds') is not null
+     and exists (select 1 from pg_proc p
+                   join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='sync_refund')
 )
 
 select

@@ -5,6 +5,7 @@ import { DEFAULT_TEMPLATE } from "./remind";
 import { supabase } from "./supabase";
 import { businessDate, qty } from "./format";
 import { kick, outboxEntry } from "./sync";
+import { REFUND_REASONS } from "./types";
 import type {
   AdjustmentReason,
   CartLine,
@@ -21,6 +22,8 @@ import type {
   Product,
   ProductPortion,
   ProductUnit,
+  Refund,
+  RefundReason,
   Sale,
   SaleItem,
   Session,
@@ -73,6 +76,13 @@ export async function pendingDeltas(): Promise<Map<string, number>> {
       movements.forEach((m) => add(m.product_id, m.delta));
     } else if (e.kind === "movement") {
       add(p.product_id as string, Number(p.delta));
+    } else if (e.kind === "refund") {
+      // Goods coming back, and — for a damaged return — going straight out
+      // again. Without this the owner reverses a sale and the shelf count does
+      // not move until the phone next reaches the server, which reads as the
+      // refund having silently failed.
+      const movements = (p.movements ?? []) as Array<{ product_id: string; delta: number }>;
+      movements.forEach((m) => add(m.product_id, m.delta));
     } else if (e.kind === "new_product") {
       // Opening stock is pending too: the product row the server will send
       // back has quantity 0 until this entry lands.
@@ -470,6 +480,182 @@ export async function recordAdjustment(args: {
   });
 
   return round3(onHand + delta);
+}
+
+// ---------------------------------------------------------------------------
+// Refunds
+// ---------------------------------------------------------------------------
+
+/**
+ * Reverse a whole sale.
+ *
+ * The sale itself is never touched. Everything else here is a new record that
+ * points at it — the same append-only rule the stock and debt ledgers already
+ * follow, and the reason a refund can be trusted at all: nothing that was true
+ * yesterday quietly stops being true.
+ *
+ * Three effects, and they must land together or not at all:
+ *   1. the refund row (money out, and why)
+ *   2. stock coming back
+ *   3. for a credit sale, the debt reversed
+ *
+ * A refund that reached the server without its return movement would show
+ * money out and the stock still gone. The reverse would show stock back and
+ * the drawer still expecting the money. So all three ride in ONE outbox entry
+ * and one server transaction, exactly as a credit sale and its charge do.
+ */
+export async function refundSale(args: {
+  sale_id: string;
+  reason: RefundReason;
+  note?: string | null;
+}): Promise<Refund> {
+  const session = await requireSession();
+  if (session.role !== "owner") {
+    // Also enforced by RLS and by sync_refund. Checked here so the message is
+    // useful rather than a sync failure surfacing hours later.
+    throw new Error("Only the owner can refund a sale");
+  }
+
+  const sale = await db.sales.get(args.sale_id);
+  if (!sale) throw new Error("That sale is not on this device");
+
+  const already = await db.refunds.where("sale_id").equals(args.sale_id).first();
+  if (already) throw new Error("That sale has already been refunded");
+
+  const items = await db.sale_items.where("sale_id").equals(args.sale_id).toArray();
+  const nowIso = new Date().toISOString();
+  const businessDay = businessDate();
+  const reason = REFUND_REASONS.find((r) => r.key === args.reason);
+  if (!reason) throw new Error("Choose why this is being refunded");
+
+  const refund: Refund = {
+    id: uuid(),
+    shop_id: session.shop_id,
+    sale_id: sale.id,
+    user_id: session.user_id,
+    amount: round2(sale.total),
+    // Not how the sale was paid. An M-Pesa sale settles as cash because this
+    // app cannot send M-Pesa, and saying so is better than implying it did.
+    settled_as: sale.payment_method === "credit" ? "credit" : "cash",
+    reason: args.reason,
+    note: args.note?.trim() || null,
+    business_date: businessDay,
+    // Dated TODAY, not the day of the sale. The money leaves the drawer now,
+    // so it belongs to today's count; back-dating it would make a past day
+    // that was already counted and signed off silently stop balancing.
+    created_at: nowIso,
+    synced_at: null,
+  };
+
+  // Goods coming back. Only for products that still exist and are tracked —
+  // a sale of an untracked item never moved stock, so nothing comes back.
+  const products = await db.products.bulkGet(items.map((i) => i.product_id));
+  const movements: StockMovement[] = [];
+  items.forEach((item, i) => {
+    const product = products[i];
+    if (!product || !product.track_stock) return;
+    const qtyBack = round3(item.base_quantity ?? item.quantity);
+    if (qtyBack <= 0) return;
+
+    movements.push({
+      id: uuid(),
+      shop_id: session.shop_id,
+      product_id: item.product_id,
+      user_id: session.user_id,
+      delta: qtyBack,
+      reason: "return",
+      note: null,
+      sale_id: sale.id,
+      buying_price: null,
+      total_cost: null,
+      note_ref: null,
+      created_at: nowIso,
+      synced_at: null,
+    });
+
+    // Damaged goods come back AND are written off. A single no-op movement
+    // would record that stock did not change while losing both facts, and the
+    // shrink report needs the second one.
+    if (!reason.sellable) {
+      movements.push({
+        id: uuid(),
+        shop_id: session.shop_id,
+        product_id: item.product_id,
+        user_id: session.user_id,
+        delta: -qtyBack,
+        reason: "damage",
+        note: "Returned damaged",
+        sale_id: sale.id,
+        buying_price: null,
+        total_cost: null,
+        note_ref: null,
+        created_at: nowIso,
+        synced_at: null,
+      });
+    }
+  });
+
+  // Reversing a credit sale moves no cash: they never paid for it. If they had
+  // part-paid at the till for more than they kept, the FIFO allocation turns
+  // the excess into credit toward their next purchase with no extra work.
+  const reversal: DebtEntry | null =
+    refund.settled_as === "credit" && sale.customer_id
+      ? {
+          id: uuid(),
+          shop_id: session.shop_id,
+          customer_id: sale.customer_id,
+          user_id: session.user_id,
+          kind: "reversal",
+          amount: refund.amount,
+          sale_id: sale.id,
+          payment_method: null,
+          mpesa_code: null,
+          note: null,
+          business_date: businessDay,
+          created_at: nowIso,
+          synced_at: null,
+        }
+      : null;
+
+  await db.transaction(
+    "rw",
+    [db.refunds, db.stock_movements, db.debt_entries, db.outbox],
+    async () => {
+      await db.refunds.add(refund);
+      if (movements.length) await db.stock_movements.bulkAdd(movements);
+      if (reversal) await db.debt_entries.add(reversal);
+      await db.outbox.add(
+        outboxEntry("refund", refund.id, {
+          refund: {
+            id: refund.id,
+            sale_id: refund.sale_id,
+            amount: refund.amount,
+            settled_as: refund.settled_as,
+            reason: refund.reason,
+            note: refund.note,
+            business_date: refund.business_date,
+            created_at: refund.created_at,
+            debt_entry_id: reversal?.id ?? null,
+          },
+          movements: movements.map((m) => ({
+            id: m.id,
+            product_id: m.product_id,
+            delta: m.delta,
+            reason: m.reason,
+            created_at: m.created_at,
+          })),
+        }),
+      );
+    },
+  );
+
+  kick();
+  return refund;
+}
+
+/** Sale ids already refunded, for marking up a list of sales. */
+export async function refundedSaleIds(): Promise<Set<string>> {
+  return new Set((await db.refunds.toArray()).map((r) => r.sale_id));
 }
 
 function round3(n: number): number {
@@ -1080,7 +1266,23 @@ export interface DayTotals {
    */
   mpesaRepayments: DebtEntry[];
   /**
-   * What should actually be in the drawer: cash sales PLUS cash repayments.
+   * Sales reversed today. Shown as their OWN line, never netted into sales:
+   * "sales 12,400, refunds -800, net 11,600" is the honest shape, and a single
+   * 11,600 hides exactly what the owner most wants to see. Same rule credit
+   * already follows.
+   *
+   * Dated by the day the money left the drawer, not the day of the original
+   * sale — back-dating would make a past day that was already counted and
+   * signed off silently stop balancing.
+   */
+  refunds: Refund[];
+  /** Cash handed back today. A credit reversal moves no cash and is excluded. */
+  refundedCash: number;
+  /** Everything reversed today, including credit reversals. Not all money. */
+  refundedTotal: number;
+  /**
+   * What should actually be in the drawer: cash sales PLUS cash repayments,
+   * LESS any cash handed back.
    * A repayment is money arriving on a day with no sale, so leaving it out
    * makes the drawer read OVER — the same failure as counting a credit sale
    * as cash, with the sign flipped.
@@ -1090,9 +1292,10 @@ export interface DayTotals {
 }
 
 export async function dayTotals(date: string): Promise<DayTotals> {
-  const [sales, debtEntries] = await Promise.all([
+  const [sales, debtEntries, refunds] = await Promise.all([
     db.sales.where("business_date").equals(date).toArray(),
     db.debt_entries.where("business_date").equals(date).toArray(),
+    db.refunds.where("business_date").equals(date).toArray(),
   ]);
 
   const sumBy = (rows: Sale[], method: PaymentMethod) =>
@@ -1109,6 +1312,14 @@ export async function dayTotals(date: string): Promise<DayTotals> {
     rows.filter((e) => e.payment_method === method).reduce((t, e) => t + e.amount, 0);
   const atTill = payments.filter((e) => e.sale_id);
   const oldDebt = payments.filter((e) => !e.sale_id);
+
+  // An M-Pesa sale is refunded in CASH — there is no Daraja, so the app cannot
+  // send M-Pesa. That means a refund always comes out of the drawer, whatever
+  // column the original sale landed in, and expected M-Pesa is never touched.
+  const refundedCash = refunds
+    .filter((r) => r.settled_as === "cash")
+    .reduce((t, r) => t + r.amount, 0);
+  const refundedTotal = refunds.reduce((t, r) => t + r.amount, 0);
 
   const paidAtTillCash = sum(atTill, "cash");
   const paidAtTillMpesa = sum(atTill, "mpesa");
@@ -1138,7 +1349,10 @@ export async function dayTotals(date: string): Promise<DayTotals> {
     mpesaRepayments: payments
       .filter((e) => e.payment_method === "mpesa")
       .sort((a, b) => a.created_at.localeCompare(b.created_at)),
-    expectedCash: round2(cash + repaidCash + paidAtTillCash),
+    refunds: refunds.sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    refundedCash: round2(refundedCash),
+    refundedTotal: round2(refundedTotal),
+    expectedCash: round2(cash + repaidCash + paidAtTillCash - refundedCash),
     expectedMpesa: round2(mpesa + repaidMpesa + paidAtTillMpesa),
   };
 }

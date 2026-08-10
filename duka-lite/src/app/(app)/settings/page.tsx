@@ -32,6 +32,7 @@ const KIND_LABELS: Record<OutboxKind, string> = {
   customer: "A customer",
   debt_entry: "A debt payment",
   reminder: "A debt reminder",
+  refund: "A refunded sale",
 };
 
 export default function SettingsPage() {

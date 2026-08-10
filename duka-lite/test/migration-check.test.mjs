@@ -27,6 +27,8 @@ const ALL = [
   "0007a_credit_enum.sql",
   "0007b_customer_debt.sql",
   "0008_debt_lifecycle.sql",
+  "0009a_refund_enums.sql",
+  "0009b_refunds.sql",
 ];
 const CHECK = readFileSync(pjoin(HERE, "..", "supabase", "check_migrations.sql"), "utf8");
 
@@ -58,7 +60,7 @@ const expect = (name, ok, detail = "") => {
 // --- fully migrated: everything must read ok ------------------------------
 const full = await build(ALL);
 const fullRows = (await full.query(CHECK)).rows;
-expect("reports a row per migration", fullRows.length === 10, `got ${fullRows.length}`);
+expect("reports a row per migration", fullRows.length === 12, `got ${fullRows.length}`);
 const notOk = fullRows.filter((r) => r.status !== "ok");
 expect(
   "a fully migrated database reports every migration ok",
@@ -93,7 +95,7 @@ await bare.exec(BREAK_0002);
 const bareRows = (await bare.query(CHECK)).rows;
 const wronglyOk = bareRows.filter((r) => r.migration !== "0001_init" && r.status === "ok");
 expect(
-  "a database with only 0001 reports the other nine as MISSING",
+  "a database with only 0001 reports every later migration as MISSING",
   wronglyOk.length === 0,
   wronglyOk.length ? `falsely ok: ${wronglyOk.map((r) => r.migration).join(", ")}` : "",
 );
@@ -119,9 +121,10 @@ const partial = await build(ALL.slice(0, 6));
 const partialRows = (await partial.query(CHECK)).rows;
 const missing = partialRows.filter((r) => r.status !== "ok").map((r) => r.migration);
 expect(
-  "a database migrated through 0005 flags exactly 0006, 0007a/b and 0008",
+  "a database migrated through 0005 flags exactly everything after it",
   missing.join(",") ===
-    "0006_weighted_average_cost,0007a_credit_enum,0007b_customer_debt,0008_debt_lifecycle",
+    "0006_weighted_average_cost,0007a_credit_enum,0007b_customer_debt," +
+      "0008_debt_lifecycle,0009a_refund_enums,0009b_refunds",
   missing.join(",") || "(none flagged)",
 );
 

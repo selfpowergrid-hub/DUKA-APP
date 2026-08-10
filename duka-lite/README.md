@@ -27,9 +27,11 @@ Create a project at [supabase.com](https://supabase.com), then in **SQL Editor**
 8. `supabase/migrations/0007a_credit_enum.sql` — the `credit` payment method
 9. `supabase/migrations/0007b_customer_debt.sql` — customers and the debt ledger
 10. `supabase/migrations/0008_debt_lifecycle.sql` — part-payment at the till, reminders, promises
+11. `supabase/migrations/0009a_refund_enums.sql` — `return` movement, `reversal` debt entry
+12. `supabase/migrations/0009b_refunds.sql` — refunds, owner-only, `sync_refund`
 10. `supabase/seed.sql` — 20 realistic duka products with opening stock
 
-**0003a/0003b and 0007a/0007b must each be run as two separate statements**, not pasted
+**0003a/0003b, 0007a/0007b and 0009a/0009b must each be run as two separate statements**, not pasted
 together: a new enum value cannot be used in the transaction that adds it, and the `b` file's
 check constraint references the values the `a` file creates. Every file is safe to re-run.
 
@@ -267,6 +269,53 @@ Settings also lists everything on the device that has not reached the server and
 plain text. A phone that dies takes its unsynced records with it — that is inherent to working
 offline and cannot be engineered away. What it can be is *recoverable*: one share turns a lost
 phone into an afternoon of retyping rather than lost sales and lost debts.
+
+## Refunds
+
+An attendant will mis-key a sale. Before this, that sale stood for ever: it still counted toward
+expected cash, so the drawer read short by exactly the mistake — and **a shortfall the owner
+cannot explain is indistinguishable from theft**, which is the one thing this app exists to tell
+apart. Stock could already be corrected with an `adjustment`; the money could not. Sales were the
+only ledger here that was append-only *and* uncorrectable.
+
+**The sale is never edited or deleted.** A refund is a new record pointing at it, exactly as a
+debt charge points at its sale.
+
+Four decisions shaped it, and each one closes a hole rather than adding a feature:
+
+- **Owner only, enforced by RLS** — not by hiding a button. Refunding a customer who never
+  returned and pocketing the cash is a named theft pattern, so permission beats detection. The
+  cost is real: an attendant alone at the counter cannot fix their own mis-key.
+- **Whole sale only**, expressed as `unique (sale_id)`. That constraint independently blocks
+  refunding the same sale twice and keeping the second payout. Idempotent replay is unaffected —
+  a replay carries the same `id` and is absorbed by `on conflict (id) do nothing`.
+- **An M-Pesa sale is refunded in CASH.** There is no Daraja by design, so the app cannot send
+  M-Pesa, and it says so instead of implying otherwise. Expected **cash** drops; expected M-Pesa
+  is untouched. Taking it off the M-Pesa side instead would leave the drawer reading over and the
+  Safaricom statement disagreeing.
+- **A credit sale is reversed, not paid out.** They never paid, so no cash moves — `sync_refund`
+  refuses a cash settlement against a credit sale outright rather than leaving it to the UI. If
+  they had part-paid more than they kept, the existing FIFO allocation turns the excess into
+  credit toward their next purchase with no extra code.
+
+**`reversal` is deliberately not `writeoff`.** A write-off is a loss the owner chose to absorb; a
+reversal is goods coming back, which is not a loss at all. Recording one as the other would
+inflate the bad-debt figure on the very screen built to make that figure honest.
+
+**A damaged return is two movements**, `return +qty` then `damage −qty`. A single no-op would
+record that stock did not change while losing both facts — that the goods came back, and that
+they were written off — and the shrink report needs the second one.
+
+**Closing shows refunds as their own line, never netted into sales.** `Sales 12,400 · Refunds
+−800 · Net 11,600` is the honest shape; a single `11,600` hides exactly what the owner most wants
+to see. Reports carries the refund exception block — count, value, share of sales, and a
+breakdown by reason code. Reason is a code rather than free text precisely so it can be counted:
+a climbing count on one reason is a pattern, and a single refund is not.
+
+The UI lives on **Closing**, not the till. It is owner-only, and Closing is where a mis-key is
+actually noticed — the drawer disagrees and the owner comes looking. The date picker already
+there means refunding yesterday's sale needs no new navigation. The screen asks *why* and nothing
+else: where the money goes is computed, never chosen, so nobody can misfile which column is short.
 
 ## Audit fixes
 
