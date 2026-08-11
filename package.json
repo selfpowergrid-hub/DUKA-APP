@@ -16,7 +16,8 @@
     "test:responsive": "node test/responsive.check.mjs",
     "test:contrast": "node test/contrast.check.mjs",
     "test:migration-check": "node test/migration-check.test.mjs",
-    "test": "npm run test:schema && npm run test:migration-check && npm run test:offline && npm run test:contrast",
+    "test:tenancy": "node test/tenancy.test.mjs",
+    "test": "npm run test:schema && npm run test:tenancy && npm run test:migration-check && npm run test:offline && npm run test:contrast",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
     "prepare:sw": "node scripts/build-sw.mjs"
   },

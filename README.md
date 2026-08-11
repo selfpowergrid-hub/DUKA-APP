@@ -157,6 +157,41 @@ server-side runtime to configure.
 
 ---
 
+## Many shops, one database
+
+Every client signs up on their own and gets their own shop. Nothing is shared between them, and
+the separation is enforced by the **database**, not by the app remembering to filter — because an
+app that forgets a filter shows a stranger's takings, and nobody notices until it is too late.
+
+- Signing up creates a shop and makes you its owner, by trigger. Two sign-ups can never land in
+  the same shop.
+- Every table carries `shop_id` and a Row Level Security policy scoping it to
+  `current_shop_id()`, a `SECURITY DEFINER` helper that reads the caller's shop from their user
+  row. A client cannot ask for another shop's rows, because the question never reaches the data.
+- Staff join an existing shop only by invitation from its owner.
+- A signed-in user belonging to no shop sees **nothing**, rather than everything — the failure
+  direction matters.
+
+`npm run test:tenancy` is the audit, and it is deliberately not a sample. It **enumerates every
+table** in the schema and requires each one to be RLS-enabled and scoped, so a table added without
+a policy fails on the day it is written rather than the day a customer notices. Then it creates
+two shops with real data in both and proves, table by table, that what one sees plus what the
+other sees accounts for every row with no overlap. It also checks that a cross-shop write is
+*refused* rather than merely invisible, and that an RPC cannot be used to reach around RLS.
+
+Writing that audit immediately flagged two policies for review. Both turned out to be correct and
+worth recording:
+
+- `users_select_self` keys off `auth.uid()` rather than the shop — narrower than shop scope, not
+  weaker.
+- `pending_invites` has RLS on and **no policy at all**, which denies every client outright. It is
+  reached only through `SECURITY DEFINER` functions, which is stricter than any policy. The audit
+  now requires that state to be declared, so it stays a decision rather than an oversight.
+
+**One operational note before real clients sign up.** The setup instructions above suggest turning
+*Confirm email* off for testing. Turn it back **on** before anyone real uses this, or a person can
+sign up with an email that is not theirs.
+
 ## Verifying it works
 
 ```bash
