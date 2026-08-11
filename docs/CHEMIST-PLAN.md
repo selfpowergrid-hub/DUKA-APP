@@ -70,10 +70,15 @@ facts, and only one of them is defensible.
 1. **Batches, expiry, FEFO dispensing** — the foundation. Comparable in size to the debt lifecycle.
 2. **Expiry alerts** — "expiring within 90 days" on Products and Reports; a hard guard on expired
    stock at the till. Small once 1 exists.
-3. **Batch traceability** — given a batch number, which sales touched it. Small; the join already
-   exists once `batch_id` is on movements.
-4. **POM flag and dispensing record** — prescriber, patient, prescription reference, captured at
-   the till for products flagged prescription-only.
+3. ~~**Batch traceability**~~ — **BUILT.** `Products → Find a batch`. Received, sold, remaining,
+   and every sale that touched it, with the contactable ones counted honestly.
+4. ~~**POM flag and dispensing record**~~ — **BUILT.** The till refuses to complete a sale
+   containing a prescription-only product until patient and prescriber are recorded, and the
+   register is searchable under `Reports → Dispensing register`.
+
+**All four steps are now complete.** What remains excluded is unchanged: controlled-drugs
+registers (not stocked), eTIMS (below threshold), and clinical patient records (a different
+system with different obligations).
 
 Deliberately excluded, and why: **controlled-drugs register** (not stocked), **eTIMS/VAT** (below
 threshold, and an external integration that deserves its own project), **patient clinical

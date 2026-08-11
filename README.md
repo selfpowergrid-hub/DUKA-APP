@@ -33,6 +33,7 @@ Create a project at [supabase.com](https://supabase.com), then in **SQL Editor**
 14. `supabase/migrations/0011_product_images.sql` — product photos
 15. `supabase/migrations/0012_batches_and_expiry.sql` — batches, expiry dates, FEFO dispensing
 16. `supabase/migrations/0013_expenses.sql` — running costs, and the drawer effect
+17. `supabase/migrations/0014_dispensing_records.sql` — the prescription-only register
 10. `supabase/seed.sql` — 20 realistic duka products with opening stock
 
 **0003a/0003b, 0007a/0007b and 0009a/0009b must each be run as two separate statements**, not pasted
@@ -414,10 +415,43 @@ then lists what is dying, soonest first. The bands are actions, not decoration: 
 usually take stock back with three months of life and almost never with less than one, so 90 days
 means *return it*, 30 days means *too late to return*, and expired means *pull it off the shelf*.
 
-Also carried: `is_pom` for prescription-only products. The dispensing record that uses it —
-prescriber, patient, prescription reference — is the next piece of work, along with batch
-traceability in the UI. Controlled-drugs registers and eTIMS are deliberately out; see
-`CHEMIST-PLAN.md` for why.
+### Prescription-only medicines
+
+`is_pom` on a product makes the till **refuse to complete the sale** until a prescription is
+recorded: patient, prescriber, and the prescription reference where there is one. It is a step in
+the checkout flow rather than a prompt afterwards, because a record that can be skipped when the
+shop is busy is a record that does not exist.
+
+The check lives in `checkout()`, not only in the screen. The UI is the layer most likely to be
+rewritten, and this is an obligation rather than a nicety.
+
+The record rides in the **same outbox entry and the same server transaction** as the sale — same
+reasoning as the debt charge and the part-payment. A sale that reached the server without its
+prescription would be a POM handed over with no record of who received it: exactly the gap this
+closes, reopened by a dropped connection.
+
+**Reports → Dispensing register** is searchable by patient, prescriber or prescription number,
+because a record that exists but cannot be found is not a record. It shows what was dispensed, to
+whom, on whose prescription, and by which member of staff. The app cannot verify anyone's
+qualification; what it records honestly is who was at the counter.
+
+Append-only, with no UPDATE or DELETE policy at all — a register that can be edited afterwards is
+not a register.
+
+### Finding a batch (recalls)
+
+**Products → Find a batch** takes the number off a recall notice and shows where that batch went:
+how much was received, how much sold, how much is still on the shelf, and every sale that touched
+it. Matching ignores spaces and dashes, because a recall notice and a stock clerk will not have
+typed it the same way and a lookup that fails on punctuation is one nobody trusts.
+
+The screen is blunt about its limit, and that is the point. A cash sale to a stranger names
+nobody, and no amount of record-keeping changes that — so it reports **how many of the sales can
+actually be traced to a person** before listing them, rather than implying the list is complete.
+A credit sale names the customer; a prescription names the patient; everything else is anonymous.
+Saying so is what makes the contactable ones worth acting on.
+
+Controlled-drugs registers and eTIMS remain deliberately out; see `docs/CHEMIST-PLAN.md` for why.
 
 ## Product photos
 

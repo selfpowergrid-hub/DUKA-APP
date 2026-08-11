@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { db } from "@/lib/db";
 import { useLiveQuery } from "dexie-react-hooks";
 import { buildReport, comparisonLabel, type PeriodKind } from "@/lib/reports";
 import { chaseList, debtTotals, AGE_BUCKETS } from "@/lib/debt";
@@ -38,6 +39,7 @@ export default function ReportsPage() {
   // The chase queue is deliberately NOT scoped to the report period: "who do
   // I ring this week" is a question about now, not about the last 30 days.
   const chase = useLiveQuery(async () => chaseList(), []);
+  const dispensedCount = useLiveQuery(async () => db.dispensing_records.count(), []);
   const debt = useLiveQuery(
     async () => (report ? debtTotals(report.period.dates) : null),
     [report?.period.from, report?.period.to],
@@ -591,6 +593,16 @@ export default function ReportsPage() {
                 title="Stock ledger"
                 hint="Opening balance to closing balance, movement by movement."
               />
+              {/* Only for a shop that actually dispenses. A duka would never
+                  open this, and a permanent link to an empty register teaches
+                  people to ignore links. */}
+              {dispensedCount !== undefined && dispensedCount > 0 && (
+                <DetailLink
+                  href={`/reports/dispensing?period=${kind}&end=${endDate}`}
+                  title="Dispensing register"
+                  hint="Every prescription-only medicine handed over, and to whom."
+                />
+              )}
               <DetailLink
                 href="/expenses"
                 title="Expenses"

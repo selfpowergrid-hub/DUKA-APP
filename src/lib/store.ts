@@ -17,6 +17,7 @@ import type {
   DebtEntry,
   DebtEntryKind,
   DebtReminder,
+  DispensingRecord,
   Expense,
   ExpenseCategory,
   ExpenseSource,
@@ -129,6 +130,18 @@ export interface CheckoutInput {
   paid_now?: number;
   paid_now_method?: RepaymentMethod;
   paid_now_mpesa_code?: string;
+  /**
+   * Required when the cart holds a prescription-only product. Selling a POM
+   * carries a record-keeping obligation, and a sale without this would be a
+   * POM handed over with no record of who received it.
+   */
+  dispensing?: {
+    patient_name: string;
+    prescriber: string;
+    prescription_ref?: string | null;
+    patient_phone?: string | null;
+    note?: string | null;
+  };
 }
 
 /**
@@ -240,6 +253,38 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
   const tracked = new Set(
     [...productById.values()].filter((p) => p.track_stock !== false).map((p) => p.id),
   );
+
+  // A prescription-only product cannot leave without a record. Enforced here
+  // rather than only in the UI, because the UI is the layer most likely to
+  // change and this is the obligation, not a nicety.
+  const pomLines = input.lines.filter((l) => productById.get(l.product_id)?.is_pom);
+  if (pomLines.length > 0) {
+    const d = input.dispensing;
+    if (!d?.patient_name?.trim()) {
+      throw new Error("Enter who the prescription is for");
+    }
+    if (!d?.prescriber?.trim()) {
+      throw new Error("Enter who prescribed it");
+    }
+  }
+
+  const dispensing: DispensingRecord | null =
+    pomLines.length > 0 && input.dispensing
+      ? {
+          id: uuid(),
+          shop_id: session.shop_id,
+          sale_id: saleId,
+          user_id: session.user_id,
+          patient_name: input.dispensing.patient_name.trim(),
+          prescriber: input.dispensing.prescriber.trim(),
+          prescription_ref: input.dispensing.prescription_ref?.trim() || null,
+          patient_phone: input.dispensing.patient_phone?.trim() || null,
+          note: input.dispensing.note?.trim() || null,
+          business_date: sale.business_date,
+          created_at: nowIso,
+          synced_at: null,
+        }
+      : null;
 
   // Stock leaving the shop. For an ordinary product that is one movement; for
   // a batch-tracked one it is a FEFO split, so ten tablets out of a strip of
@@ -367,13 +412,21 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
 
   await db.transaction(
     "rw",
-    [db.sales, db.sale_items, db.stock_movements, db.debt_entries, db.outbox],
+    [
+      db.sales,
+      db.sale_items,
+      db.stock_movements,
+      db.debt_entries,
+      db.dispensing_records,
+      db.outbox,
+    ],
     async () => {
       await db.sales.add(sale);
       await db.sale_items.bulkAdd(items);
       await db.stock_movements.bulkAdd(movements);
       if (charge) await db.debt_entries.add(charge);
       if (partPayment) await db.debt_entries.add(partPayment);
+      if (dispensing) await db.dispensing_records.add(dispensing);
       await db.outbox.add(
         outboxEntry("sale", saleId, {
           sale: {
@@ -386,6 +439,16 @@ export async function checkout(input: CheckoutInput): Promise<Sale> {
             created_at: sale.created_at,
             customer_id: sale.customer_id,
             debt_entry_id: charge?.id ?? null,
+            dispensing: dispensing
+              ? {
+                  id: dispensing.id,
+                  patient_name: dispensing.patient_name,
+                  prescriber: dispensing.prescriber,
+                  prescription_ref: dispensing.prescription_ref,
+                  patient_phone: dispensing.patient_phone,
+                  note: dispensing.note,
+                }
+              : null,
             immediate_payment: partPayment
               ? {
                   id: partPayment.id,

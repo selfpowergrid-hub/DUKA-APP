@@ -580,7 +580,8 @@ async function pullRecentActivity(session: Session) {
   // Movements are keyed by created_at, not business_date.
   const sinceTs = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString();
 
-  const [sales, counts, movements, debts, reminders, refunds, expenses] = await Promise.all([
+  const [sales, counts, movements, debts, reminders, refunds, expenses, dispensing] =
+    await Promise.all([
     sb.from("sales").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     sb.from("cash_counts").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     // Movements used to be pushed and never pulled back, which made the shrink
@@ -607,11 +608,19 @@ async function pullRecentActivity(session: Session) {
     // the history window belongs to a sale this device no longer holds.
     sb.from("refunds").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     sb.from("expenses").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
+    sb
+      .from("dispensing_records")
+      .select("*")
+      .eq("shop_id", session.shop_id)
+      .gte("business_date", since),
   ]);
   if (sales.error) throw new Error(sales.error.message);
   if (counts.error) throw new Error(counts.error.message);
   if (movements.error) throw new Error(movements.error.message);
   if (debts.error) throw new Error(debts.error.message);
+  if (!dispensing.error && dispensing.data?.length) {
+    await db.dispensing_records.bulkPut(dispensing.data as never);
+  }
   if (!expenses.error && expenses.data?.length) {
     const pendingExpenseIds = new Set(
       (await db.outbox.where("kind").equals("expense").toArray()).map((e) => e.entity_id),

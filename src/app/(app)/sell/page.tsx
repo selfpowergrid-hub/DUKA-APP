@@ -19,7 +19,7 @@ import type {
   RepaymentMethod,
 } from "@/lib/types";
 
-type Stage = "cart" | "pay" | "cash" | "mpesa" | "credit" | "done";
+type Stage = "cart" | "pom" | "pay" | "cash" | "mpesa" | "credit" | "done";
 
 /**
  * Responsive shape of the till:
@@ -57,6 +57,11 @@ export default function SellPage() {
   const [paidNow, setPaidNow] = useState("");
   const [paidNowMethod, setPaidNowMethod] = useState<RepaymentMethod>("cash");
   const [paidNowCode, setPaidNowCode] = useState("");
+  /** Prescription details, required when the cart holds a POM product. */
+  const [patient, setPatient] = useState("");
+  const [prescriber, setPrescriber] = useState("");
+  const [rxRef, setRxRef] = useState("");
+  const [patientPhone, setPatientPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<{
     total: number;
@@ -154,6 +159,10 @@ export default function SellPage() {
     setPaidNow("");
     setPaidNowMethod("cash");
     setPaidNowCode("");
+    setPatient("");
+    setPrescriber("");
+    setRxRef("");
+    setPatientPhone("");
     setError(null);
     setReceipt(null);
   }
@@ -178,6 +187,14 @@ export default function SellPage() {
         paid_now: partNum > 0 ? partNum : undefined,
         paid_now_method: partNum > 0 ? paidNowMethod : undefined,
         paid_now_mpesa_code: partNum > 0 ? paidNowCode : undefined,
+        dispensing: hasPom
+          ? {
+              patient_name: patient,
+              prescriber,
+              prescription_ref: rxRef || null,
+              patient_phone: patientPhone || null,
+            }
+          : undefined,
       });
 
       // For credit, the useful number on the receipt is not the change — it is
@@ -250,6 +267,12 @@ export default function SellPage() {
   // class of race as overselling. Blocking on a stale local balance would
   // refuse legitimate credit to someone who settled up on the other till an
   // hour ago, which is worse than the overshoot.
+  // A prescription-only item in the cart makes the record compulsory, so the
+  // till routes through a step rather than relying on anyone remembering.
+  const pomInCart = lines.filter((l) => (products ?? []).find((p) => p.id === l.product_id)?.is_pom);
+  const hasPom = pomInCart.length > 0;
+  const rxReady = patient.trim().length > 0 && prescriber.trim().length > 0;
+
   const partNum = Number(paidNow) || 0;
   // Blocks the button rather than failing at checkout, and says the useful
   // thing: a "part"-payment that covers everything is just a cash sale.
@@ -551,6 +574,67 @@ export default function SellPage() {
           </div>
         )}
 
+        {stage === "pom" && (
+          <Panel>
+            <TotalBar total={total} count={lines.length} />
+
+            <div className="rounded-2xl border-2 border-warn/40 bg-warn-soft p-3">
+              <p className="font-semibold">Prescription only</p>
+              <p className="text-sm text-muted">
+                {pomInCart.map((l) => l.name).join(", ")} must be recorded before it leaves the
+                shop. This is kept as your dispensing register.
+              </p>
+            </div>
+
+            <label className="block">
+              <span className="mb-1 block text-base font-medium">Who is it for?</span>
+              <Input
+                autoFocus
+                placeholder="Patient name"
+                value={patient}
+                onChange={(e) => setPatient(e.target.value)}
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-base font-medium">Who prescribed it?</span>
+              <Input
+                placeholder="Doctor, clinic or hospital"
+                value={prescriber}
+                onChange={(e) => setPrescriber(e.target.value)}
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-base font-medium">
+                Prescription number{" "}
+                <span className="font-normal text-muted">if it has one</span>
+              </span>
+              <Input value={rxRef} onChange={(e) => setRxRef(e.target.value)} />
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-base font-medium">
+                Patient phone <span className="font-normal text-muted">optional</span>
+              </span>
+              <Input
+                inputMode="tel"
+                value={patientPhone}
+                onChange={(e) => setPatientPhone(e.target.value)}
+              />
+            </label>
+
+            {error && <Notice>{error}</Notice>}
+
+            <Button size="xl" disabled={!rxReady} onClick={() => setStage("pay")}>
+              {rxReady ? "Continue to payment" : "Name and prescriber are needed"}
+            </Button>
+            <Button variant="ghost" onClick={() => setStage("cart")}>
+              Back to cart
+            </Button>
+          </Panel>
+        )}
+
         {stage === "pay" && (
           <Panel>
             <TotalBar total={total} count={lines.length} />
@@ -586,8 +670,11 @@ export default function SellPage() {
               On credit (deni)
             </Button>
 
-            <Button variant="ghost" onClick={() => setStage("cart")}>
-              Back to cart
+            <Button
+              variant="ghost"
+              onClick={() => setStage(hasPom ? "pom" : "cart")}
+            >
+              {hasPom ? "Back to the prescription" : "Back to cart"}
             </Button>
           </Panel>
         )}

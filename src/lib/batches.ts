@@ -284,3 +284,144 @@ export async function salesOfBatch(batchId: string): Promise<
     .map((m) => ({ sale_id: m.sale_id!, quantity: -m.delta, created_at: m.created_at }))
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
+
+// ---------------------------------------------------------------------------
+// Recall
+// ---------------------------------------------------------------------------
+
+export interface BatchMatch {
+  batch: ProductBatch;
+  productName: string;
+  quantity: number;
+  state: ExpiryState;
+  daysLeft: number;
+}
+
+/**
+ * Find a batch by the number printed on the carton.
+ *
+ * Matched loosely — case-insensitive, ignoring spaces and dashes — because a
+ * recall notice and a stock clerk will not have typed it the same way, and a
+ * recall lookup that fails on punctuation is a recall lookup nobody trusts.
+ */
+export async function findBatches(query: string): Promise<BatchMatch[]> {
+  const needle = query.replace(/[\s-]/g, "").toUpperCase();
+  if (!needle) return [];
+
+  const [batches, movements, products] = await Promise.all([
+    db.product_batches.toArray(),
+    db.stock_movements.toArray(),
+    db.products.toArray(),
+  ]);
+  const names = new Map(products.map((p) => [p.id, p.name]));
+  const today = businessDate();
+
+  const qtyByBatch = new Map<string, number>();
+  for (const m of movements) {
+    if (!m.batch_id) continue;
+    qtyByBatch.set(m.batch_id, (qtyByBatch.get(m.batch_id) ?? 0) + m.delta);
+  }
+
+  return batches
+    .filter((b) => b.batch_no.replace(/[\s-]/g, "").toUpperCase().includes(needle))
+    .map((b) => ({
+      batch: b,
+      productName: names.get(b.product_id) ?? "Unknown product",
+      quantity: Math.round((qtyByBatch.get(b.id) ?? 0) * 1000) / 1000,
+      state: expiryState(b.expiry_date, today),
+      daysLeft: daysUntil(b.expiry_date, today),
+    }))
+    .sort((a, b) => a.batch.expiry_date.localeCompare(b.batch.expiry_date));
+}
+
+export interface BatchTraceSale {
+  sale_id: string;
+  quantity: number;
+  created_at: string;
+  business_date: string;
+  total: number;
+  /** Named only when the sale was on credit — otherwise nobody knows who. */
+  customerName: string | null;
+  customerPhone: string | null;
+  /** Filled when the sale carried a prescription. */
+  patientName: string | null;
+  patientPhone: string | null;
+}
+
+export interface BatchTrace {
+  batch: ProductBatch;
+  productName: string;
+  received: number;
+  sold: number;
+  remaining: number;
+  sales: BatchTraceSale[];
+  /** How many of those sales identify a person who can actually be contacted. */
+  contactable: number;
+}
+
+/**
+ * Everything known about one batch: how much came in, how much went out, and
+ * to whom.
+ *
+ * The last part is the honest limit of a counter-based till. A cash sale to a
+ * stranger names nobody, and no amount of record-keeping changes that — so the
+ * screen reports how many of the sales CAN be traced to a person rather than
+ * implying the list is complete. A credit sale names the customer; a
+ * prescription names the patient. Everything else is anonymous, and saying so
+ * is what makes the traceable ones worth acting on.
+ */
+export async function batchTrace(batchId: string): Promise<BatchTrace | null> {
+  const batch = await db.product_batches.get(batchId);
+  if (!batch) return null;
+
+  const [movements, sales, customers, products, dispensing] = await Promise.all([
+    db.stock_movements.toArray(),
+    db.sales.toArray(),
+    db.customers.toArray(),
+    db.products.toArray(),
+    db.dispensing_records.toArray(),
+  ]);
+
+  const mine = movements.filter((m) => m.batch_id === batchId);
+  const received = Math.round(
+    mine.filter((m) => m.delta > 0).reduce((t, m) => t + m.delta, 0) * 1000,
+  ) / 1000;
+  const sold = Math.round(
+    -mine.filter((m) => m.delta < 0 && m.reason === "sale").reduce((t, m) => t + m.delta, 0) * 1000,
+  ) / 1000;
+  const remaining = Math.round(mine.reduce((t, m) => t + m.delta, 0) * 1000) / 1000;
+
+  const saleById = new Map(sales.map((s) => [s.id, s]));
+  const customerById = new Map(customers.map((c) => [c.id, c]));
+  const dispBySale = new Map(dispensing.map((d) => [d.sale_id, d]));
+
+  const traced: BatchTraceSale[] = mine
+    .filter((m) => m.sale_id && m.delta < 0 && m.reason === "sale")
+    .map((m) => {
+      const sale = saleById.get(m.sale_id!);
+      const customer = sale?.customer_id ? customerById.get(sale.customer_id) : undefined;
+      const disp = dispBySale.get(m.sale_id!);
+      return {
+        sale_id: m.sale_id!,
+        quantity: Math.round(-m.delta * 1000) / 1000,
+        created_at: m.created_at,
+        business_date: sale?.business_date ?? m.created_at.slice(0, 10),
+        total: sale?.total ?? 0,
+        customerName: customer?.name ?? null,
+        customerPhone: customer?.phone ?? null,
+        patientName: disp?.patient_name ?? null,
+        patientPhone: disp?.patient_phone ?? null,
+      };
+    })
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  return {
+    batch,
+    productName: products.find((p) => p.id === batch.product_id)?.name ?? "Unknown product",
+    received,
+    sold,
+    remaining,
+    sales: traced,
+    contactable: traced.filter((t) => t.customerPhone || t.patientPhone).length,
+  };
+}

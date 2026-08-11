@@ -34,6 +34,7 @@ const MIGRATIONS = [
   "0011_product_images.sql",
   "0012_batches_and_expiry.sql",
   "0013_expenses.sql",
+  "0014_dispensing_records.sql",
 ];
 
 const db = new PGlite();
@@ -1570,6 +1571,134 @@ expect(
   Number(otherSeesExpenses) === 0,
   `c=${otherSeesExpenses}`,
 );
+
+// =========================================================================
+// 0014 — dispensing records
+// =========================================================================
+const rxSaleId = "0d14aa00-0000-4000-8000-000000000001";
+const rxId = "0d14aa00-0000-4000-8000-000000000002";
+const rxSale = {
+  id: rxSaleId,
+  total: 190,
+  payment_method: "cash",
+  amount_tendered: 200,
+  business_date: new Date().toISOString().slice(0, 10),
+  created_at: new Date().toISOString(),
+  dispensing: {
+    id: rxId,
+    patient_name: "Grace Wanjiru",
+    prescriber: "Dr Otieno",
+    prescription_ref: "RX-4471",
+    patient_phone: "0722888999",
+  },
+};
+const callRx = () =>
+  as(owner, () =>
+    q("select public.sync_sale($1::jsonb, $2::jsonb, $3::jsonb)", [
+      JSON.stringify(rxSale),
+      JSON.stringify([]),
+      JSON.stringify([]),
+    ]),
+  );
+
+await callRx();
+await db.exec("reset role;");
+const rxRow = (
+  await q("select patient_name, prescriber, sale_id from public.dispensing_records where id=$1", [rxId])
+).rows[0];
+expect(
+  "a prescription is recorded in the same call as its sale",
+  rxRow?.patient_name === "Grace Wanjiru" && rxRow?.sale_id === rxSaleId,
+  JSON.stringify(rxRow),
+);
+
+// Replay must not create a second register entry for one prescription.
+await callRx();
+await callRx();
+await db.exec("reset role;");
+expect(
+  "replaying the sale does not duplicate the register entry",
+  Number(
+    (await q("select count(*) c from public.dispensing_records where sale_id=$1", [rxSaleId]))
+      .rows[0].c,
+  ) === 1,
+);
+
+// One prescription per sale. A second would mean two prescriptions for one
+// transaction, which is a mis-key rather than a real event.
+let secondRx = false;
+try {
+  await q(
+    `insert into public.dispensing_records (id, shop_id, sale_id, user_id, patient_name, prescriber, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, $3, 'Someone Else', 'Dr X', current_date, now())`,
+    [shop, rxSaleId, owner],
+  );
+} catch {
+  secondRx = true;
+}
+expect("a sale cannot carry two prescriptions", secondRx);
+
+// A register that can be edited afterwards is not a register.
+await db.exec("set role authenticated;");
+let rxUpdate = false;
+try {
+  await as(owner, () =>
+    q("update public.dispensing_records set patient_name = 'Someone Else' where id=$1", [rxId]),
+  );
+} catch {
+  rxUpdate = true;
+}
+let rxDelete = false;
+try {
+  await as(owner, () => q("delete from public.dispensing_records where id=$1", [rxId]));
+} catch {
+  rxDelete = true;
+}
+await db.exec("reset role;");
+expect("a dispensing record cannot be edited, even by the owner", rxUpdate);
+expect("a dispensing record cannot be deleted", rxDelete);
+
+// An attendant IS the person at the counter, so they must be able to record
+// one — making it owner-only would mean the register is written later by
+// someone who was not there.
+await db.exec("set role authenticated;");
+let attRx = true;
+try {
+  await as(att, () =>
+    q("select public.sync_sale($1::jsonb, $2::jsonb, $3::jsonb)", [
+      JSON.stringify({
+        ...rxSale,
+        id: "0d14aa00-0000-4000-8000-000000000003",
+        dispensing: { ...rxSale.dispensing, id: "0d14aa00-0000-4000-8000-000000000004" },
+      }),
+      JSON.stringify([]),
+      JSON.stringify([]),
+    ]),
+  );
+} catch {
+  attRx = false;
+}
+await db.exec("reset role;");
+expect("an attendant can record a dispensing", attRx);
+
+let blankPatient = false;
+try {
+  await q(
+    `insert into public.dispensing_records (id, shop_id, sale_id, user_id, patient_name, prescriber, business_date, created_at)
+     values (gen_random_uuid(), $1, $2, $3, '   ', 'Dr X', current_date, now())`,
+    [shop, "0d14aa00-0000-4000-8000-000000000003", owner],
+  );
+} catch {
+  blankPatient = true;
+}
+expect("a blank patient name is rejected", blankPatient);
+
+await db.exec("set role authenticated;");
+const otherSeesRx = (
+  await as(other, () => q("select count(*) c from public.dispensing_records"))
+).rows[0].c;
+await db.exec("reset role;");
+expect("another shop cannot see the register", Number(otherSeesRx) === 0, `c=${otherSeesRx}`);
 
 // --- weighted-average cost ------------------------------------------------
 // The scenario the old "latest cost" behaviour got wrong: buy cheap, then buy

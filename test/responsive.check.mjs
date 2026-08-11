@@ -272,6 +272,8 @@ for (const vp of VIEWPORTS) {
     "/reports/stock",
     "/reports/trading",
     "/expenses",
+    "/products/batches",
+    "/reports/dispensing",
     "/settings",
   ]) {
     await page.goto(`${BASE}${route}`, { waitUntil: "networkidle" });

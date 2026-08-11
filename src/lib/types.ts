@@ -291,6 +291,32 @@ export interface Expense {
   synced_at: string | null;
 }
 
+/**
+ * Who a prescription-only medicine went to.
+ *
+ * One record per SALE, not per line: a customer presents one prescription and
+ * may take three items off it, which is how the paper register works too.
+ *
+ * Deliberately not a clinical record. Diagnosis, allergies and dosage history
+ * belong to a patient system with obligations this app does not meet, and half
+ * a clinical record is worse than none.
+ */
+export interface DispensingRecord {
+  id: string;
+  shop_id: string;
+  sale_id: string;
+  /** Who handed it over. The app cannot verify a qualification; it records who. */
+  user_id: string;
+  patient_name: string;
+  prescriber: string;
+  prescription_ref: string | null;
+  patient_phone: string | null;
+  note: string | null;
+  business_date: string;
+  created_at: string;
+  synced_at: string | null;
+}
+
 export interface Staff {
   id: string;
   shop_id: string;

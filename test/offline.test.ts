@@ -1914,7 +1914,10 @@ async function main() {
     selling_price: 15,
     low_stock_threshold: 20,
     track_batches: true,
-    is_pom: true,
+    // Deliberately NOT is_pom here: this fixture exists to exercise batches and
+    // FEFO, and a prescription-only product would need a dispensing record on
+    // every checkout below, burying the thing being tested. POM enforcement has
+    // its own section further down.
     portions: [{ name: "Strip of 10", factor: 10, price: 130 }],
   });
 
@@ -2382,6 +2385,177 @@ async function main() {
   );
   expect("rent was recorded against the right category", rent.category === "rent");
   expect("airtime was recorded from M-Pesa", airtimeSpend.paid_from === "mpesa");
+
+  // =======================================================================
+  // Dispensing records and batch recall
+  // =======================================================================
+  const { findBatches, batchTrace } = await import("../src/lib/batches");
+
+  const pomProd = await saveProduct({
+    name: "Augmentin 625mg",
+    unit: "pc",
+    buying_price: 60,
+    selling_price: 95,
+    low_stock_threshold: 5,
+    track_batches: true,
+    is_pom: true,
+  });
+  const recallBatch = await saveBatch({
+    product_id: pomProd.id,
+    batch_no: "AUG-2231",
+    expiry_date: day(300),
+  });
+  await recordMovement({
+    product_id: pomProd.id,
+    delta: 50,
+    reason: "restock",
+    buying_price: 60,
+    batch_id: recallBatch.id,
+  });
+
+  // A prescription-only product cannot leave without a record. Enforced in the
+  // store, not only in the UI, because the UI is the layer most likely to
+  // change and this is the obligation rather than a nicety.
+  let pomBlocked = false;
+  try {
+    await checkout({
+      lines: [
+        { product_id: pomProd.id, name: pomProd.name, unit: "pc", unit_price: 95, quantity: 2 },
+      ],
+      payment_method: "cash",
+      amount_tendered: 190,
+    });
+  } catch {
+    pomBlocked = true;
+  }
+  expect("a POM cannot be sold without a dispensing record", pomBlocked);
+
+  let noPrescriber = false;
+  try {
+    await checkout({
+      lines: [
+        { product_id: pomProd.id, name: pomProd.name, unit: "pc", unit_price: 95, quantity: 2 },
+      ],
+      payment_method: "cash",
+      amount_tendered: 190,
+      dispensing: { patient_name: "Grace Wanjiru", prescriber: "" },
+    });
+  } catch {
+    noPrescriber = true;
+  }
+  expect("...and not without naming who prescribed it", noPrescriber);
+
+  const pomSale = await checkout({
+    lines: [
+      { product_id: pomProd.id, name: pomProd.name, unit: "pc", unit_price: 95, quantity: 2 },
+    ],
+    payment_method: "cash",
+    amount_tendered: 190,
+    dispensing: {
+      patient_name: "Grace Wanjiru",
+      prescriber: "Dr Otieno, Kapsabet Clinic",
+      prescription_ref: "RX-4471",
+      patient_phone: "0722888999",
+    },
+  });
+
+  const record = (await db.dispensing_records.toArray()).find((r) => r.sale_id === pomSale.id);
+  expect(
+    "the prescription is recorded against the sale",
+    record?.patient_name === "Grace Wanjiru" && record?.prescription_ref === "RX-4471",
+    JSON.stringify(record),
+  );
+  expect(
+    "it rides in the SAME outbox entry as the sale, never separately",
+    (await db.outbox.where("entity_id").equals(pomSale.id).count()) === 1 &&
+      (
+        (await db.outbox.where("entity_id").equals(pomSale.id).first())!.payload as {
+          sale: { dispensing?: { patient_name: string } };
+        }
+      ).sale.dispensing?.patient_name === "Grace Wanjiru",
+  );
+
+  // An ordinary product still sells with no prescription, or the till would be
+  // unusable for everything that is not a medicine.
+  const otcSale = await checkout({
+    lines: [{ product_id: unga.id, name: unga.name, unit: "packet", unit_price: 200, quantity: 1 }],
+    payment_method: "cash",
+    amount_tendered: 200,
+  });
+  expect(
+    "an ordinary product needs no prescription",
+    (await db.dispensing_records.toArray()).every((r) => r.sale_id !== otcSale.id),
+  );
+
+  // --- recall lookup ---------------------------------------------------------
+  const found = await findBatches("aug 2231");
+  expect(
+    "a batch is found however the number was spaced or dashed",
+    found.length === 1 && found[0].batch.id === recallBatch.id,
+    JSON.stringify(found.map((f) => f.batch.batch_no)),
+  );
+  expect(
+    "an unknown batch number finds nothing rather than erroring",
+    (await findBatches("NOT-A-BATCH")).length === 0,
+  );
+
+  const tr = (await batchTrace(recallBatch.id))!;
+  expect(
+    "the trace balances: received less sold is what is left",
+    tr.received === 50 && tr.sold === 2 && tr.remaining === 48,
+    `received=${tr.received} sold=${tr.sold} remaining=${tr.remaining}`,
+  );
+  expect(
+    "the sale that took from the batch is listed",
+    tr.sales.length === 1 && tr.sales[0].sale_id === pomSale.id && tr.sales[0].quantity === 2,
+    JSON.stringify(tr.sales),
+  );
+  // The point of the whole screen: a recalled batch has to lead to a person.
+  expect(
+    "a prescription names the patient, so the sale is contactable",
+    tr.contactable === 1 &&
+      tr.sales[0].patientName === "Grace Wanjiru" &&
+      tr.sales[0].patientPhone === "0722888999",
+    JSON.stringify(tr.sales[0]),
+  );
+
+  // ...and the honest limit: a counter sale names nobody, and the count says so.
+  const anonProd = await saveProduct({
+    name: "Panadol Extra",
+    unit: "pc",
+    buying_price: 10,
+    selling_price: 20,
+    low_stock_threshold: 5,
+    track_batches: true,
+  });
+  const anonBatch = await saveBatch({
+    product_id: anonProd.id,
+    batch_no: "PAN-9",
+    expiry_date: day(300),
+  });
+  await recordMovement({
+    product_id: anonProd.id,
+    delta: 20,
+    reason: "restock",
+    buying_price: 10,
+    batch_id: anonBatch.id,
+  });
+  await checkout({
+    lines: [
+      { product_id: anonProd.id, name: anonProd.name, unit: "pc", unit_price: 20, quantity: 3 },
+    ],
+    payment_method: "cash",
+    amount_tendered: 60,
+  });
+  const anonTrace = (await batchTrace(anonBatch.id))!;
+  expect(
+    "a cash counter sale is traced but names nobody, and the count admits it",
+    anonTrace.sales.length === 1 &&
+      anonTrace.sales[0].customerName === null &&
+      anonTrace.sales[0].patientName === null &&
+      anonTrace.contactable === 0,
+    JSON.stringify(anonTrace.sales[0]),
+  );
 
   // --- a past day is empty, and today's figures are untouched -------------
   const yesterday = businessDate(new Date(Date.now() - 86_400_000));

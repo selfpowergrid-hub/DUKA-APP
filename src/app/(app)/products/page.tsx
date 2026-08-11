@@ -7,6 +7,7 @@ import { useCategories } from "@/hooks/use-categories";
 import { Thumb, useProductImages } from "@/components/product-photo";
 import { useLiveQuery } from "dexie-react-hooks";
 import { expiringStock } from "@/lib/batches";
+import { db } from "@/lib/db";
 import { useSession } from "@/components/session-provider";
 import { Button, Input, Money } from "@/components/ui";
 import { qty } from "@/lib/format";
@@ -20,6 +21,7 @@ export default function ProductsPage() {
   const photos = useProductImages();
   // Undefined until loaded, so the button cannot flash in and out on first paint.
   const expiring = useLiveQuery(async () => (await expiringStock()).length, []);
+  const hasBatches = useLiveQuery(async () => (await db.product_batches.count()) > 0, []);
   const { session } = useSession();
   const isOwner = session?.role === "owner";
 
@@ -73,6 +75,15 @@ export default function ProductsPage() {
             <Link href="/products/expiry" className="md:w-40">
               <Button variant="danger" className="w-full">
                 Expiry · {expiring}
+              </Button>
+            </Link>
+          )}
+          {/* Only when the shop tracks batches at all. A recall lookup on a
+              duka with no batches is a screen that can only disappoint. */}
+          {hasBatches && (
+            <Link href="/products/batches" className="md:w-40">
+              <Button variant="neutral" className="w-full">
+                Find a batch
               </Button>
             </Link>
           )}

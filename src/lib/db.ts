@@ -8,6 +8,7 @@ import type {
   DebtEntry,
   DebtReminder,
   DiscardedEntry,
+  DispensingRecord,
   Expense,
   ProductBatch,
   ProductImage,
@@ -43,6 +44,7 @@ export class DukaDB extends Dexie {
   product_images!: EntityTable<ProductImage, "product_id">;
   product_batches!: EntityTable<ProductBatch, "id">;
   expenses!: EntityTable<Expense, "id">;
+  dispensing_records!: EntityTable<DispensingRecord, "id">;
   discarded!: EntityTable<DiscardedEntry, "id">;
   outbox!: EntityTable<OutboxEntry, "seq">;
   meta!: EntityTable<{ key: string; value: unknown }, "key">;
@@ -134,6 +136,13 @@ export class DukaDB extends Dexie {
     this.version(10).stores({
       expenses: "id, business_date, category, created_at",
     });
+
+    // v11 — the dispensing register. Indexed by sale_id so a sale can be shown
+    // with its prescription, and by patient_name because "what have we given
+    // this person" is the second question anyone asks of a register.
+    this.version(11).stores({
+      dispensing_records: "id, sale_id, business_date, patient_name, created_at",
+    });
   }
 }
 
@@ -183,6 +192,7 @@ export async function clearLocalData(): Promise<void> {
       db.product_images,
       db.product_batches,
       db.expenses,
+      db.dispensing_records,
       db.discarded,
       db.outbox,
       db.meta,
@@ -205,6 +215,7 @@ export async function clearLocalData(): Promise<void> {
         db.product_images.clear(),
         db.product_batches.clear(),
         db.expenses.clear(),
+        db.dispensing_records.clear(),
         db.discarded.clear(),
         db.outbox.clear(),
         db.meta.clear(),
