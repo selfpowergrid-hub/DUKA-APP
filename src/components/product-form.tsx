@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveCategory, saveProduct, saveUnit, setProductActive } from "@/lib/store";
 import type { Product, ProductUnit } from "@/lib/types";
-import { Button, Field, Input, Money, Notice } from "@/components/ui";
+import { Button, Field, Input, Money, Notice, Select } from "@/components/ui";
 import { ProductPhoto } from "@/components/product-photo";
 import { qty } from "@/lib/format";
 import { useCategories } from "@/hooks/use-categories";
@@ -38,6 +38,7 @@ export function ProductForm({ product }: { product?: Product }) {
   const [newUnit, setNewUnit] = useState("");
   const [newUnitFractional, setNewUnitFractional] = useState(false);
   const [addingUnit, setAddingUnit] = useState(false);
+  const [addingCategory, setAddingCategory] = useState(false);
   const [portions, setPortions] = useState<PortionDraft[]>([]);
   const [portionsLoaded, setPortionsLoaded] = useState(false);
   const [opening, setOpening] = useState("");
@@ -138,61 +139,43 @@ export function ProductForm({ product }: { product?: Product }) {
         <Input required autoFocus={isNew} value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
 
-      {/* Only on edit. A photo belongs to a product, and on a new product there
-          is nothing to attach it to yet — the form would have to hold the image
-          in memory and write it after save, which is a second failure path for
-          a decorative field. The form tells the owner that instead. */}
-      <Field label="Photo" hint="Optional. Appears on the Sell screen to help find the item.">
-        <ProductPhoto productId={product?.id} />
+      {/* Category and unit are both pickers over a list that only grows. As
+          chips they wrapped over three rows and pushed the prices below the
+          fold; as native selects they are one row each and Android opens a
+          full-screen list, which is a better thumb target than a chip anyway. */}
+      <Field label="Category" hint="Optional. Helps you find things once you have a lot of stock.">
+        <Select
+          value={addingCategory ? "__new" : categoryId}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "__new") {
+              setAddingCategory(true);
+              setCategoryId("");
+              return;
+            }
+            setAddingCategory(false);
+            setNewCategory("");
+            setCategoryId(v);
+          }}
+        >
+          <option value="">No category</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+          <option value="__new">+ New category…</option>
+        </Select>
       </Field>
 
-      <Field label="Category" hint="Optional. Helps you find things once you have a lot of stock.">
-        <div className="flex flex-col gap-2">
-          {categories.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCategoryId("");
-                  setNewCategory("");
-                }}
-                className={`min-h-12 rounded-xl border px-4 text-base font-semibold ${
-                  !categoryId && !newCategory.trim()
-                    ? "border-brand bg-brand text-white"
-                    : "border-line bg-surface text-ink"
-                }`}
-              >
-                None
-              </button>
-              {categories.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => {
-                    setCategoryId(c.id);
-                    setNewCategory("");
-                  }}
-                  className={`min-h-12 rounded-xl border px-4 text-base font-semibold ${
-                    categoryId === c.id
-                      ? "border-brand bg-brand text-white"
-                      : "border-line bg-surface text-ink"
-                  }`}
-                >
-                  {c.name}
-                </button>
-              ))}
-            </div>
-          )}
-          <Input
-            placeholder={categories.length ? "…or type a new category" : "e.g. Flour, Soap, Fresh"}
-            value={newCategory}
-            onChange={(e) => {
-              setNewCategory(e.target.value);
-              if (e.target.value.trim()) setCategoryId("");
-            }}
-          />
-        </div>
-      </Field>
+      {addingCategory && (
+        <Input
+          autoFocus
+          placeholder="e.g. Flour, Soap, Fresh"
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value)}
+        />
+      )}
 
       <Field
         label="Unit"
@@ -202,70 +185,77 @@ export function ProductForm({ product }: { product?: Product }) {
             : "Sold as whole items."
         }
       >
-        <div className="flex flex-wrap gap-2">
+        <Select
+          value={addingUnit ? "__new" : unit}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "__new") {
+              setAddingUnit(true);
+              return;
+            }
+            setAddingUnit(false);
+            setUnit(v as ProductUnit);
+          }}
+        >
           {units.map((u) => (
-            <button
-              key={u.id}
-              type="button"
-              onClick={() => setUnit(u.code as ProductUnit)}
-              title={u.label}
-              className={`min-h-12 rounded-xl border px-4 text-base font-semibold ${
-                unit === u.code
-                  ? "border-brand bg-brand text-white"
-                  : "border-line bg-surface text-ink"
-              }`}
-            >
-              {u.code}
-            </button>
+            <option key={u.id} value={u.code}>
+              {u.label && u.label !== u.code ? `${u.code} — ${u.label}` : u.code}
+            </option>
           ))}
-          <button
-            type="button"
-            onClick={() => setAddingUnit((v) => !v)}
-            className="min-h-12 rounded-xl border border-dashed border-line bg-surface px-4 text-base font-semibold text-muted"
-          >
-            + unit
-          </button>
-        </div>
-
-        {addingUnit && (
-          <div className="mt-2 flex flex-col gap-2 rounded-xl bg-panel p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                placeholder="e.g. gunia, tray, debe"
-                value={newUnit}
-                onChange={(e) => setNewUnit(e.target.value)}
-                className="flex-1 min-w-40"
-              />
-              <Button
-                type="button"
-                variant="neutral"
-                onClick={async () => {
-                  const code = newUnit.trim().toLowerCase();
-                  if (!code) return;
-                  await saveUnit({ code, label: newUnit.trim(), is_fractional: newUnitFractional });
-                  setUnit(code);
-                  setNewUnit("");
-                  setNewUnitFractional(false);
-                  setAddingUnit(false);
-                }}
-              >
-                Add
-              </Button>
-            </div>
-            {/* Without this a new unit could never be sold in halves — there was
-                previously no way to mark a custom unit as fractional at all. */}
-            <label className="flex min-h-12 items-center gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={newUnitFractional}
-                onChange={(e) => setNewUnitFractional(e.target.checked)}
-                className="h-5 w-5 accent-[var(--color-brand)]"
-              />
-              Can be sold in halves (e.g. 2.5)
-            </label>
-          </div>
-        )}
+          <option value="__new">+ New unit…</option>
+        </Select>
       </Field>
+
+      {/* Outside the Field, because Field renders a <label> and a button inside
+          a label fights the label's own click handling. */}
+      {addingUnit && (
+        <div className="flex flex-col gap-2 rounded-xl bg-panel p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              autoFocus
+              placeholder="e.g. gunia, tray, debe"
+              value={newUnit}
+              onChange={(e) => setNewUnit(e.target.value)}
+              className="min-w-40 flex-1"
+            />
+            <Button
+              type="button"
+              variant="neutral"
+              disabled={!newUnit.trim()}
+              onClick={async () => {
+                const code = newUnit.trim().toLowerCase();
+                if (!code) return;
+                await saveUnit({ code, label: newUnit.trim(), is_fractional: newUnitFractional });
+                setUnit(code);
+                setNewUnit("");
+                setNewUnitFractional(false);
+                setAddingUnit(false);
+              }}
+            >
+              Add
+            </Button>
+          </div>
+          {/* Without this a new unit could never be sold in halves — there was
+              previously no way to mark a custom unit as fractional at all. */}
+          <label className="flex min-h-12 items-center gap-2 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={newUnitFractional}
+              onChange={(e) => setNewUnitFractional(e.target.checked)}
+              className="h-6 w-6 accent-[var(--color-brand)]"
+            />
+            Can be sold in halves (e.g. 2.5)
+          </label>
+          <Button
+            type="button"
+            variant="ghost"
+            className="min-h-12 self-start px-0 text-sm"
+            onClick={() => setAddingUnit(false)}
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
 
       <Field
         label="Pack group"
@@ -313,6 +303,15 @@ export function ProductForm({ product }: { product?: Product }) {
           Profit per {unit}: <Money value={margin} className="font-semibold" />
           {sellingNum > 0 && ` (${Math.round((margin / sellingNum) * 100)}% margin)`}
         </p>
+      )}
+
+      {/* A photo needs a product to hang on, so it appears only once there is
+          one. On a new product the field could only ever say "save first",
+          which is a row of dead space at the top of every new entry. */}
+      {product && (
+        <Field label="Photo" hint="Optional. Appears on the Sell screen to help find the item.">
+          <ProductPhoto productId={product.id} />
+        </Field>
       )}
 
       {/* ------------------------------------------------- stock tracking --- */}
