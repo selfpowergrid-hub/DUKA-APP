@@ -11,7 +11,7 @@ them — see the notes under each.
 
 ## 1. Returns and refunds
 
-**Status: BUILT.** See the "Refunds" section of `duka-lite/README.md`, and `REFUNDS-PLAN.md`
+**Status: BUILT.** See the "Refunds" section of the [README](../README.md), and `REFUNDS-PLAN.md`
 for the four decisions that shaped it. Shipped as migration `0009a`/`0009b`: an append-only
 `refunds` table, owner-only by RLS, whole-sale-only by `unique (sale_id)`, with an M-Pesa sale
 refunded in cash and a credit sale reversed rather than paid out. The notes below are kept as
@@ -67,7 +67,7 @@ later without changing the data shape.
 
 ## 2. Customer debt / credit sales
 
-**Status: BUILT.** See the "Customer debt" section of `duka-lite/README.md`.
+**Status: BUILT.** See the "Customer debt" section of the [README](../README.md).
 
 Shipped as `payment_method = 'credit'` plus an append-only `debt_entries` ledger with FIFO
 allocation derived at read time, duka-tuned ageing buckets, credit limits as warnings rather
@@ -77,7 +77,7 @@ M-Pesa sides. The notes below are kept as the record of what was decided and why
 **The lifecycle is built too** (migration `0008`): part-payment at the till, an append-only
 reminder log, promise-to-pay dates driving a *Chase today* queue, statement sharing, and a
 discard archive so a rejected record is never destroyed. See the "Customer debt", "The chase"
-and "Nothing gets lost" sections of `duka-lite/README.md`.
+and "Nothing gets lost" sections of the [README](../README.md).
 
 The open question below — *should a credit sale reduce stock immediately?* — was answered yes,
 and is asserted in `test:offline`: goods leave the shop on credit exactly as on a cash sale.

@@ -104,24 +104,29 @@ Two things make a new deploy safe for a shop that is mid-shift:
 
 ## Deploying
 
-**The app is in `duka-lite/`, not at the repository root.** The root holds the brief and the
-planning documents. Any host that builds from the repository root will find no `package.json`,
-build nothing, and deploy an empty site — which surfaces as a **successful** deployment serving
-`404: NOT_FOUND`, not as a build failure. That combination is confusing enough to be worth
-naming here.
+**Zero configuration.** The app is at the repository root, so Vercel (or anything else) detects
+Next.js on its own and builds it. Import the repo, press Deploy, done — no Root Directory to set,
+nothing to remember.
 
-On **Vercel**: set **Root Directory** to `duka-lite` — in the import screen, or afterwards under
-Settings -> Build and Deployment. That is the whole fix.
+That layout is deliberate and worth not undoing. The app used to live in a `duka-lite/`
+subdirectory with the planning documents at the root, and it cost four failed deployments to
+learn why that is a trap:
 
-**A `vercel.json` at the repository root does not work for this**, and it is worth recording why,
-because it looks like it should. `buildCommand` and `installCommand` can be pointed into a
-subdirectory happily — the install runs, packages resolve, everything looks healthy. But Vercel's
-Next.js builder reads `package.json` **from the Root Directory** to identify the framework
-version, and fails with `No Next.js version detected` before the build command is ever reached.
-Setting `framework: "nextjs"` does not substitute for it. Detection is the step that has to find
-the app, and only Root Directory moves detection.
+- Vercel builds from the repository root by default. Finding no `package.json` there, it builds
+  nothing and deploys an empty site — then reports **success** and serves `404: NOT_FOUND`. A
+  failed build would have been far easier to diagnose than a successful one serving nothing.
+- A root `vercel.json` cannot fix it. `buildCommand` and `installCommand` happily point into a
+  subdirectory — the install runs, packages resolve, the log looks healthy — and then the build
+  dies on `No Next.js version detected`, because Vercel's Next.js builder reads `package.json`
+  **from the Root Directory** to identify the framework, and does that *before* the build command
+  runs. `framework: "nextjs"` does not substitute for it.
+- The Root Directory **setting** does work, but it lives on the Vercel project, not in the repo.
+  Every fresh import silently resets it, and the resulting 404 looks identical each time with no
+  hint that a dropdown is involved.
 
-### Checking the database is up to date
+The planning documents now live in [`docs/`](docs/).
+
+## Checking the database is up to date
 
 Migrations here are pasted by hand, so there is no bookkeeping table to trust. Run
 `supabase/check_migrations.sql` in the SQL editor: it reports one row per migration by looking

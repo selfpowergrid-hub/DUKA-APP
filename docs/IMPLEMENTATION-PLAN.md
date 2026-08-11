@@ -4,8 +4,8 @@ Derived from `duka-lite-build-prompt.pdf`. Stack is fixed (Next.js App Router + 
 Supabase/Postgres/Auth + RLS, PWA, Dexie/IndexedDB, Vercel). Scope is fixed. This plan only
 decides *how*, never *what*.
 
-> **Status: built.** The app is in [`duka-lite/`](duka-lite/). See its
-> [README](duka-lite/README.md) for setup and verification. Three decisions changed during the
+> **Status: built.** The app is in the repository root. See its
+> [README](../README.md) for setup and verification. Three decisions changed during the
 > build; they are recorded at the bottom under *Deviations from this plan*.
 
 ---
@@ -318,7 +318,7 @@ Three things changed once the code met reality.
 
 ## 10. What was verified, and how
 
-`npm run verify` in `duka-lite/` runs lint, typecheck, both suites, and a production build.
+`npm run verify` runs lint, typecheck, both suites, and a production build.
 
 - **23 schema checks** (`test/schema.test.mjs`) run the real migration against a real Postgres
   (PGlite/WASM) and assert the payment-shape constraints, RLS isolation across two shops, that
