@@ -139,6 +139,42 @@ export default function ReportsPage() {
           : `${report.period.label} · ${formatDay(report.period.from)} to ${formatDay(report.period.to)}`}
       </p>
 
+      {/* Navigation, so it sits where navigation belongs: above the summary
+          rather than beneath a screenful of it. These are the only useful
+          thing on the page for a shop with no trade yet, and they used to be
+          the last thing you reached. Compact on purpose — enough to choose
+          between, not a second summary. The chosen period travels with each
+          link, so a drill-down never silently reports a different week from
+          the one on screen. */}
+      <div className="no-print mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <DetailLink
+          href={`/reports/products?period=${kind}&end=${endDate}`}
+          title="Products"
+          hint="Sold, left, earned"
+        />
+        <DetailLink
+          href={`/reports/stock?period=${kind}&end=${endDate}`}
+          title="Stock ledger"
+          hint="Opening to closing"
+        />
+        <DetailLink
+          href={`/reports/trading?period=${kind}&end=${endDate}`}
+          title="Profit & loss"
+          hint="Down to net profit"
+        />
+        <DetailLink href="/expenses" title="Expenses" hint="Rent, wages, transport" />
+        {/* Only for a shop that actually dispenses. A duka would never open
+            this, and a permanent link to an empty register teaches people to
+            ignore links. */}
+        {dispensedCount !== undefined && dispensedCount > 0 && (
+          <DetailLink
+            href={`/reports/dispensing?period=${kind}&end=${endDate}`}
+            title="Dispensing"
+            hint="Prescriptions given"
+          />
+        )}
+      </div>
+
       <div className="print-stack flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6">
         <div className="flex flex-col gap-4">
           {/* ------------------------------------------------------ sales --- */}
@@ -571,51 +607,6 @@ export default function ReportsPage() {
 
           {shared && <Notice tone="cash">{shared}</Notice>}
 
-          {/* The three full reports. Kept off this screen rather than bolted
-              onto it: each is long, each prints on its own, and burying a
-              product table under a summary makes both harder to read. The
-              chosen period travels with the link, so a drill-down never
-              silently reports a different week from the one on screen. */}
-          <div className="no-print rounded-2xl border border-line bg-surface p-4">
-            <h2 className="text-lg font-bold">Full reports</h2>
-            <p className="mb-3 text-sm text-muted">
-              For {report.period.label.toLowerCase()}. Every figure opens into the records behind
-              it.
-            </p>
-            <div className="flex flex-col gap-2">
-              <DetailLink
-                href={`/reports/products?period=${kind}&end=${endDate}`}
-                title="Products"
-                hint="Every product: what was there, what sold, what is left, what it made."
-              />
-              <DetailLink
-                href={`/reports/stock?period=${kind}&end=${endDate}`}
-                title="Stock ledger"
-                hint="Opening balance to closing balance, movement by movement."
-              />
-              {/* Only for a shop that actually dispenses. A duka would never
-                  open this, and a permanent link to an empty register teaches
-                  people to ignore links. */}
-              {dispensedCount !== undefined && dispensedCount > 0 && (
-                <DetailLink
-                  href={`/reports/dispensing?period=${kind}&end=${endDate}`}
-                  title="Dispensing register"
-                  hint="Every prescription-only medicine handed over, and to whom."
-                />
-              )}
-              <DetailLink
-                href="/expenses"
-                title="Expenses"
-                hint="Rent, wages, transport and the rest. Owner only."
-              />
-              <DetailLink
-                href={`/reports/trading?period=${kind}&end=${endDate}`}
-                title="Profit & loss"
-                hint="Sales, less cost of goods, losses and running costs, down to net profit."
-              />
-            </div>
-          </div>
-
           <div className="no-print grid grid-cols-2 gap-3">
             <Button variant="neutral" onClick={() => window.print()}>
               Print
@@ -637,17 +628,24 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/**
+ * One report link.
+ *
+ * Sized to be chosen between at a glance rather than read: the title carries
+ * the meaning and the hint is a reminder, not a description. Five of these have
+ * to fit above the summary without becoming a screenful of their own.
+ */
 function DetailLink({ href, title, hint }: { href: string; title: string; hint: string }) {
   return (
     <Link
       href={href}
-      className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-line bg-panel px-4 py-3 transition-colors lg:hover:border-brand"
+      className="flex min-h-16 flex-col justify-center rounded-xl border border-line bg-panel px-3 py-2 transition-colors lg:hover:border-brand lg:hover:bg-brand-soft"
     >
-      <span className="min-w-0">
-        <span className="block font-semibold">{title}</span>
-        <span className="block text-sm text-muted">{hint}</span>
+      <span className="flex items-center justify-between gap-1">
+        <span className="truncate font-semibold">{title}</span>
+        <span className="shrink-0 text-brand-dark">›</span>
       </span>
-      <span className="shrink-0 text-lg text-brand-dark">›</span>
+      <span className="block truncate text-sm text-muted">{hint}</span>
     </Link>
   );
 }
