@@ -128,6 +128,22 @@ learn why that is a trap:
 
 The planning documents now live in [`docs/`](docs/).
 
+**One more trap, learned the hard way: Redeploy rebuilds *that deployment's* commit, not the
+latest one.** After the move above, a Redeploy pressed on an older deployment cheerfully rebuilt
+the pre-move commit — which really did have no `package.json` at the root — and produced the same
+404 as before, making a solved problem look unsolved. The giveaway is in the first lines of the
+build log:
+
+```
+Cloning github.com/... (Branch: main, Commit: decd4b9)   <- check this hash
+Build Completed in /vercel/output [87ms]                 <- 87ms means nothing was built
+```
+
+Always check the commit hash in the log against `git log -1`. A build that finishes in under a
+second installed nothing and compiled nothing; a real build of this app takes about half a minute
+and prints `Detected Next.js version`. To deploy the latest code, push — or press Redeploy on the
+**newest** deployment, not an old one.
+
 ## Checking the database is up to date
 
 Migrations here are pasted by hand, so there is no bookkeeping table to trust. Run
