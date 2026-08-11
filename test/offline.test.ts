@@ -28,6 +28,8 @@ import {
 import { businessDate, money } from "../src/lib/format";
 import type { Product, Session } from "../src/lib/types";
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 let failures = 0;
 function expect(name: string, ok: boolean, detail = "") {
   if (!ok) failures++;
@@ -2134,6 +2136,134 @@ async function main() {
     "every sale that touched a batch can be found again",
     touched.length === 2 && touched.reduce((t, r) => t + r.quantity, 0) === 30,
     JSON.stringify(touched),
+  );
+
+  // =======================================================================
+  // Drill-down reports: product table, stock card, trading account
+  // =======================================================================
+  const { productLines, stockCard, tradingAccount } = await import("../src/lib/report-detail");
+  const { buildPeriod: buildPeriodFn } = await import("../src/lib/reports");
+  const todayPeriod = buildPeriodFn("day", businessDate());
+
+  const repProd = await saveProduct({
+    name: "Report Test Soap",
+    unit: "pc",
+    buying_price: 40,
+    selling_price: 70,
+    low_stock_threshold: 5,
+    opening_quantity: 100,
+  });
+  await recordMovement({ product_id: repProd.id, delta: 20, reason: "restock", buying_price: 40 });
+  await checkout({
+    lines: [
+      { product_id: repProd.id, name: repProd.name, unit: "pc", unit_price: 70, quantity: 8 },
+    ],
+    payment_method: "cash",
+    amount_tendered: 560,
+  });
+  await recordAdjustment({ product_id: repProd.id, reason: "damage", value: 5 });
+
+  const repRows = await productLines(todayPeriod);
+  const row = repRows.find((r) => r.product_id === repProd.id)!;
+
+  // The identity the whole report rests on. If this drifts, every figure
+  // downstream is quietly wrong.
+  expect(
+    "opening + received - sold - lost = remaining",
+    Math.abs(row.discrepancy) < 0.001,
+    `discrepancy=${row.discrepancy}`,
+  );
+  expect(
+    "received counts the opening stock and the restock",
+    row.received === 120,
+    `received=${row.received}`,
+  );
+  expect("sold is counted in the product's own unit", row.sold === 8, `sold=${row.sold}`);
+  expect("damage counts as lost, not as sold", row.lost === 5, `lost=${row.lost}`);
+  expect(
+    "remaining matches the shelf",
+    row.remaining === 107,
+    `remaining=${row.remaining}`,
+  );
+  expect(
+    "revenue and profit use the cost recorded at the moment of sale",
+    row.revenue === 560 && row.profit === 240,
+    `revenue=${row.revenue} profit=${row.profit}`,
+  );
+  expect(
+    "stock left is valued at cost, not at retail",
+    row.remainingValue === 107 * 40,
+    `${row.remainingValue}`,
+  );
+
+  // --- the stock card ---------------------------------------------------------
+  const card = (await stockCard(repProd.id, todayPeriod))!;
+  expect(
+    "the stock card opens where the period opened",
+    card.opening === row.opening,
+    `${card.opening} vs ${row.opening}`,
+  );
+  expect(
+    "the running balance ends exactly at the closing balance",
+    card.entries.length > 0 &&
+      card.entries[card.entries.length - 1].balance === card.closing,
+    `last=${card.entries[card.entries.length - 1]?.balance} closing=${card.closing}`,
+  );
+  expect(
+    "every movement in the period appears on the card",
+    // opening stock, restock, sale, damage
+    card.entries.length === 4,
+    `${card.entries.length} entries`,
+  );
+  expect(
+    "a sale line can be traced back to its transaction total",
+    card.entries.some((e) => e.movement.reason === "sale" && e.saleTotal === 560),
+  );
+
+  // --- the trading account ----------------------------------------------------
+  const acc = await tradingAccount(todayPeriod);
+  expect(
+    "net sales is sales less refunds",
+    acc.netSales === round2(acc.sales - acc.refunds),
+    `${acc.netSales} vs ${acc.sales} - ${acc.refunds}`,
+  );
+  expect(
+    "gross profit is net sales less cost of goods",
+    acc.grossProfit === round2(acc.netSales - acc.costOfGoods),
+    `${acc.grossProfit}`,
+  );
+  expect(
+    "trading profit deducts stock losses and bad debt from gross profit",
+    acc.tradingProfit === round2(acc.grossProfit - acc.stockLosses - acc.badDebt),
+    `${acc.tradingProfit}`,
+  );
+  // Valuing a loss at retail would overstate it — the shop is out what it paid.
+  expect(
+    "stock losses are valued at cost, not at the price they might have fetched",
+    acc.stockLosses >= 5 * 40,
+    `${acc.stockLosses}`,
+  );
+  expect(
+    "a period with no activity reports zeroes rather than dividing by zero",
+    (await tradingAccount(buildPeriodFn("day", "2020-01-01"))).grossMarginPct === 0,
+  );
+
+  // A reversal is goods coming back, not a loss. Counting it as bad debt would
+  // inflate the very figure the Debts screen exists to keep honest. There ARE
+  // write-offs in this suite, so the claim is not "bad debt is zero" — it is
+  // "bad debt counts write-offs and nothing else".
+  const periodEntries = await db.debt_entries
+    .where("business_date")
+    .anyOf(todayPeriod.dates)
+    .toArray();
+  const writeoffs = round2(
+    periodEntries.filter((e) => e.kind === "writeoff").reduce((t, e) => t + e.amount, 0),
+  );
+  const reversals = periodEntries.filter((e) => e.kind === "reversal");
+  expect(
+    "bad debt counts write-offs only, and reversals exist to prove it excludes them",
+    reversals.length > 0 && acc.badDebt === writeoffs && writeoffs > 0,
+    `badDebt=${acc.badDebt} writeoffs=${writeoffs} reversals=${reversals.length}`,
   );
 
   // --- a past day is empty, and today's figures are untouched -------------

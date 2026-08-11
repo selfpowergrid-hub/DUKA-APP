@@ -286,6 +286,57 @@ plain text. A phone that dies takes its unsynced records with it — that is inh
 offline and cannot be engineered away. What it can be is *recoverable*: one share turns a lost
 phone into an afternoon of retyping rather than lost sales and lost debts.
 
+## The three full reports
+
+The Reports screen is a summary. Three drill-down reports sit behind it, each printable on its
+own, each opening into the records underneath — because a total nobody can take apart is a total
+nobody acts on. The selected period travels with the link, so a drill-down never silently reports
+a different week from the one on screen.
+
+**Products** — every product, not a top ten: what was on the shelf at the start, what came in,
+what sold, what was lost, what is left, and what it made. Every row expands into the movements
+behind it.
+
+**Stock ledger** — one product's opening balance, every movement in order with a running balance,
+then the closing balance. This is the screen that settles *"the shelf says 14 and the app says
+20"*: not with a total, but by showing every event between the two so the owner can point at the
+line where they diverged.
+
+**Trading account** — sales, less refunds, less cost of goods = gross profit; then stock losses
+and written-off debt = trading profit. Cost of goods and losses each open into their breakdown.
+
+Two decisions in that last one are worth stating plainly:
+
+- **It is not called a profit and loss account**, because it is not one. A P&L ends in net profit
+  after rent, salaries, electricity and licences, none of which this app records. Inventing them
+  would be worse than omitting them, and the screen says so rather than leaving the owner to
+  assume. Everything it does show is measured.
+- **Losses are valued at cost, not at retail.** Marking a damaged packet up to the price it might
+  have fetched overstates the loss — the shop is out what it paid for it.
+
+### How opening and closing stock are reconstructed
+
+No snapshots and no month-end close. Every change is a movement, so both ends are derivable:
+
+```
+closing = quantity now − everything that moved after the period ended
+opening = closing      − everything that moved during the period
+```
+
+A period from three months ago reconstructs as exactly as today does, for as long as the device
+holds the movements.
+
+"Quantity now" carries the one subtlety. `products.quantity` is maintained by the server trigger,
+so it reflects only what has **synced** — on a phone that has been selling offline all morning it
+is stale by exactly that morning's trade. The reports add the unsynced movements back, the same
+way the till and the product list already do. The first version did not, and the tests caught it
+reading zero: without that step the reports would disagree with the shelf whenever the shop was
+offline, which is most of the time and precisely when they matter.
+
+Each row also carries a `discrepancy`: `opening + received − sold − lost − remaining`. It should
+always be zero, and if it is ever not, something wrote to `products.quantity` outside the movement
+ledger. The report says so rather than quietly balancing the row.
+
 ## Batches and expiry (running this in a chemist)
 
 The money half of this app transfers to a pharmacy unchanged. The stock half did not, and the gap

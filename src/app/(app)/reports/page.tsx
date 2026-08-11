@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 import { buildReport, comparisonLabel, type PeriodKind } from "@/lib/reports";
 import { chaseList, debtTotals, AGE_BUCKETS } from "@/lib/debt";
@@ -568,6 +569,36 @@ export default function ReportsPage() {
 
           {shared && <Notice tone="cash">{shared}</Notice>}
 
+          {/* The three full reports. Kept off this screen rather than bolted
+              onto it: each is long, each prints on its own, and burying a
+              product table under a summary makes both harder to read. The
+              chosen period travels with the link, so a drill-down never
+              silently reports a different week from the one on screen. */}
+          <div className="no-print rounded-2xl border border-line bg-surface p-4">
+            <h2 className="text-lg font-bold">Full reports</h2>
+            <p className="mb-3 text-sm text-muted">
+              For {report.period.label.toLowerCase()}. Every figure opens into the records behind
+              it.
+            </p>
+            <div className="flex flex-col gap-2">
+              <DetailLink
+                href={`/reports/products?period=${kind}&end=${endDate}`}
+                title="Products"
+                hint="Every product: what was there, what sold, what is left, what it made."
+              />
+              <DetailLink
+                href={`/reports/stock?period=${kind}&end=${endDate}`}
+                title="Stock ledger"
+                hint="Opening balance to closing balance, movement by movement."
+              />
+              <DetailLink
+                href={`/reports/trading?period=${kind}&end=${endDate}`}
+                title="Trading account"
+                hint="Sales less cost of goods and losses. Does not include rent or salaries."
+              />
+            </div>
+          </div>
+
           <div className="no-print grid grid-cols-2 gap-3">
             <Button variant="neutral" onClick={() => window.print()}>
               Print
@@ -586,5 +617,20 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <dt className="text-muted">{label}</dt>
       <dd className="tabular font-semibold">{value}</dd>
     </div>
+  );
+}
+
+function DetailLink({ href, title, hint }: { href: string; title: string; hint: string }) {
+  return (
+    <Link
+      href={href}
+      className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-line bg-panel px-4 py-3 transition-colors lg:hover:border-brand"
+    >
+      <span className="min-w-0">
+        <span className="block font-semibold">{title}</span>
+        <span className="block text-sm text-muted">{hint}</span>
+      </span>
+      <span className="shrink-0 text-lg text-brand-dark">›</span>
+    </Link>
   );
 }
