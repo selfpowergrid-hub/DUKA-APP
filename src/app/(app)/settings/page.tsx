@@ -35,6 +35,7 @@ const KIND_LABELS: Record<OutboxKind, string> = {
   refund: "A refunded sale",
   product_image: "A product photo",
   batch: "A stock batch",
+  expense: "An expense",
 };
 
 export default function SettingsPage() {

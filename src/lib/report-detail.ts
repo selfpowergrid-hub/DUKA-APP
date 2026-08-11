@@ -3,7 +3,13 @@
 import { db } from "./db";
 import { pendingDeltas } from "./store";
 import type { Period } from "./reports";
-import type { MovementReason, Product, SaleItem, StockMovement } from "./types";
+import type {
+  ExpenseCategory,
+  MovementReason,
+  Product,
+  SaleItem,
+  StockMovement,
+} from "./types";
 
 /**
  * The drill-down reports: the product table, the stock card, and the trading
@@ -244,6 +250,12 @@ export async function stockCard(productId: string, period: Period): Promise<Stoc
 // 3. The trading account
 // ---------------------------------------------------------------------------
 
+export interface ExpenseGroup {
+  category: ExpenseCategory;
+  amount: number;
+  count: number;
+}
+
 export interface TradingAccount {
   sales: number;
   refunds: number;
@@ -256,6 +268,15 @@ export interface TradingAccount {
   /** Debt the owner forgave. A reversal is NOT a loss and is excluded. */
   badDebt: number;
   tradingProfit: number;
+  /** Running costs, by category. Voided entries count for nothing. */
+  expenses: ExpenseGroup[];
+  expensesTotal: number;
+  /**
+   * What the shop actually made. This is the bottom line — the figure the
+   * trading account alone could never give, because rent and wages were not
+   * being recorded anywhere.
+   */
+  netProfit: number;
   /** Sale lines with no recorded cost — excluded rather than counted as free. */
   unpricedLines: number;
   /** Stock on hand at the end of the period, at cost. Not profit; capital. */
@@ -263,23 +284,29 @@ export interface TradingAccount {
 }
 
 /**
- * Sales less what the goods cost, less what was lost.
+ * The full profit and loss account.
  *
- * Deliberately NOT called a profit and loss account. A P&L ends in net profit
- * after rent, salaries, electricity and licences — none of which this app
- * records, and inventing them would be worse than omitting them. What this can
- * state honestly is the trading position: everything below it is a real
- * measurement rather than an estimate.
+ * Sales, less what the goods cost, less what was lost, less what it costs to
+ * keep the doors open. It became a real P&L the moment expenses started being
+ * recorded — before that it stopped at trading profit and said so, because a
+ * bottom line missing rent and wages is worse than no bottom line at all.
+ *
+ * Every figure is measured from records the shop keeps. Nothing is estimated,
+ * apportioned or accrued: an expense counts on the day it was paid, which is
+ * how a duka actually thinks about money and avoids inventing a precision the
+ * records do not have.
  */
 export async function tradingAccount(period: Period): Promise<TradingAccount> {
-  const [lines, refundRows, debtEntries, products, movements, sales] = await Promise.all([
-    productLines(period),
-    db.refunds.where("business_date").anyOf(period.dates).toArray(),
-    db.debt_entries.where("business_date").anyOf(period.dates).toArray(),
-    db.products.toArray(),
-    db.stock_movements.toArray(),
-    db.sales.where("business_date").anyOf(period.dates).toArray(),
-  ]);
+  const [lines, refundRows, debtEntries, products, movements, sales, expenseRows] =
+    await Promise.all([
+      productLines(period),
+      db.refunds.where("business_date").anyOf(period.dates).toArray(),
+      db.debt_entries.where("business_date").anyOf(period.dates).toArray(),
+      db.products.toArray(),
+      db.stock_movements.toArray(),
+      db.sales.where("business_date").anyOf(period.dates).toArray(),
+      db.expenses.where("business_date").anyOf(period.dates).toArray(),
+    ]);
 
   const costOf = new Map(products.map((p) => [p.id, p.buying_price]));
   const saleDate = new Map(
@@ -317,6 +344,18 @@ export async function tradingAccount(period: Period): Promise<TradingAccount> {
     debtEntries.filter((e) => e.kind === "writeoff").reduce((t, e) => t + e.amount, 0),
   );
 
+  // Voided expenses stay in the record and count for nothing.
+  const liveExpenses = expenseRows.filter((e) => !e.voided_at);
+  const byCategory = new Map<ExpenseCategory, ExpenseGroup>();
+  for (const e of liveExpenses) {
+    const g = byCategory.get(e.category) ?? { category: e.category, amount: 0, count: 0 };
+    g.amount = round2(g.amount + e.amount);
+    g.count += 1;
+    byCategory.set(e.category, g);
+  }
+  const expensesTotal = round2(liveExpenses.reduce((t, e) => t + e.amount, 0));
+  const tradingProfit = round2(grossProfit - stockLosses - badDebt);
+
   return {
     sales: salesTotal,
     refunds,
@@ -326,7 +365,10 @@ export async function tradingAccount(period: Period): Promise<TradingAccount> {
     grossMarginPct: netSales > 0 ? round2((grossProfit / netSales) * 100) : 0,
     stockLosses,
     badDebt,
-    tradingProfit: round2(grossProfit - stockLosses - badDebt),
+    tradingProfit,
+    expenses: [...byCategory.values()].sort((a, b) => b.amount - a.amount),
+    expensesTotal,
+    netProfit: round2(tradingProfit - expensesTotal),
     unpricedLines: lines.filter((l) => l.revenue > 0 && l.cost == null).length,
     closingStockValue: round2(lines.reduce((t, l) => t + l.remainingValue, 0)),
   };

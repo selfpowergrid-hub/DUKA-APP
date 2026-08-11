@@ -17,6 +17,9 @@ import type {
   DebtEntry,
   DebtEntryKind,
   DebtReminder,
+  Expense,
+  ExpenseCategory,
+  ExpenseSource,
   ReminderChannel,
   RepaymentMethod,
   MovementReason,
@@ -534,6 +537,118 @@ export async function recordAdjustment(args: {
   });
 
   return round3(onHand + delta);
+}
+
+// ---------------------------------------------------------------------------
+// Expenses
+// ---------------------------------------------------------------------------
+
+/**
+ * Record money spent that is not stock.
+ *
+ * Owner only, for the same reason refunds are: money leaving with no goods
+ * coming in is the least verifiable transaction in the app, and "transport,
+ * 500" with 500 in the pocket is the same theft pattern as a phantom refund.
+ *
+ * `paid_from` is required rather than inferred because it decides whether the
+ * drawer should be lighter tonight. Cash taken from the till lowers expected
+ * cash at Closing — without that, the count reads short by exactly the amount
+ * and looks indistinguishable from theft, which is the ambiguity this whole
+ * app exists to remove.
+ */
+export async function saveExpense(args: {
+  category: ExpenseCategory;
+  amount: number;
+  paid_from: ExpenseSource;
+  note?: string | null;
+  /** Defaults to today. Lets last night's rent be entered this morning. */
+  business_date?: string;
+}): Promise<Expense> {
+  const session = await requireSession();
+  if (session.role !== "owner") {
+    throw new Error("Only the owner can record an expense");
+  }
+  const amount = round2(args.amount);
+  if (!(amount > 0)) throw new Error("Enter how much was spent");
+
+  const nowIso = new Date().toISOString();
+  const expense: Expense = {
+    id: uuid(),
+    shop_id: session.shop_id,
+    user_id: session.user_id,
+    category: args.category,
+    amount,
+    paid_from: args.paid_from,
+    note: args.note?.trim() || null,
+    business_date: args.business_date || businessDate(),
+    voided_at: null,
+    void_reason: null,
+    created_at: nowIso,
+    updated_at: nowIso,
+    synced_at: null,
+  };
+
+  await db.transaction("rw", [db.expenses, db.outbox], async () => {
+    await db.expenses.add(expense);
+    await db.outbox.add(outboxEntry("expense", expense.id, expensePayload(expense)));
+  });
+
+  kick();
+  return expense;
+}
+
+/**
+ * Void an expense. Never delete, never edit the amount.
+ *
+ * A mistyped figure has to be fixable — an expense stuck at 20,000 instead of
+ * 2,000 would wreck every report after it — but the original stays visible,
+ * because an expense that can be silently rewritten is an expense nobody can
+ * audit. The database enforces this too: only the void columns are grantable.
+ */
+export async function voidExpense(id: string, reason?: string | null): Promise<void> {
+  const session = await requireSession();
+  if (session.role !== "owner") throw new Error("Only the owner can void an expense");
+
+  const existing = await db.expenses.get(id);
+  if (!existing) throw new Error("That expense is not on this device");
+  if (existing.voided_at) return;
+
+  const nowIso = new Date().toISOString();
+  const voided: Expense = {
+    ...existing,
+    voided_at: nowIso,
+    void_reason: reason?.trim() || null,
+    updated_at: nowIso,
+    synced_at: null,
+  };
+
+  await db.transaction("rw", [db.expenses, db.outbox], async () => {
+    await db.expenses.put(voided);
+    await db.outbox.add(outboxEntry("expense", voided.id, expensePayload(voided)));
+  });
+
+  kick();
+}
+
+function expensePayload(e: Expense) {
+  return {
+    id: e.id,
+    category: e.category,
+    amount: e.amount,
+    paid_from: e.paid_from,
+    note: e.note,
+    business_date: e.business_date,
+    voided_at: e.voided_at,
+    void_reason: e.void_reason,
+    created_at: e.created_at,
+    updated_at: e.updated_at,
+  };
+}
+
+/** Live expenses for a period. Voided ones are excluded from every total. */
+export async function expensesOn(dates: string[]): Promise<Expense[]> {
+  const rows = await db.expenses.where("business_date").anyOf(dates).toArray();
+  return rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 // ---------------------------------------------------------------------------
@@ -1523,6 +1638,16 @@ export interface DayTotals {
   refunds: Refund[];
   /** Cash handed back today. A credit reversal moves no cash and is excluded. */
   refundedCash: number;
+  /**
+   * Money spent out of the till today. It leaves the drawer, so expected cash
+   * MUST come down by it — otherwise the count reads short by exactly this
+   * amount and an honest owner paying for transport looks like a thief.
+   */
+  spentFromTill: number;
+  /** Spent from the shop's M-Pesa. Lowers expected M-Pesa the same way. */
+  spentFromMpesa: number;
+  /** Every live expense today, for the Closing breakdown. */
+  expenses: Expense[];
   /** Everything reversed today, including credit reversals. Not all money. */
   refundedTotal: number;
   /**
@@ -1537,11 +1662,21 @@ export interface DayTotals {
 }
 
 export async function dayTotals(date: string): Promise<DayTotals> {
-  const [sales, debtEntries, refunds] = await Promise.all([
+  const [sales, debtEntries, refunds, expenseRows] = await Promise.all([
     db.sales.where("business_date").equals(date).toArray(),
     db.debt_entries.where("business_date").equals(date).toArray(),
     db.refunds.where("business_date").equals(date).toArray(),
+    db.expenses.where("business_date").equals(date).toArray(),
   ]);
+
+  // A voided expense stays in the record but counts for nothing.
+  const liveExpenses = expenseRows.filter((e) => !e.voided_at);
+  const spentFromTill = liveExpenses
+    .filter((e) => e.paid_from === "till_cash")
+    .reduce((t, e) => t + e.amount, 0);
+  const spentFromMpesa = liveExpenses
+    .filter((e) => e.paid_from === "mpesa")
+    .reduce((t, e) => t + e.amount, 0);
 
   const sumBy = (rows: Sale[], method: PaymentMethod) =>
     rows.filter((s) => s.payment_method === method).reduce((sum, s) => sum + s.total, 0);
@@ -1600,7 +1735,10 @@ export async function dayTotals(date: string): Promise<DayTotals> {
     mpesaWithoutCode:
       sales.filter((s) => s.payment_method === "mpesa" && !s.mpesa_code).length +
       payments.filter((e) => e.payment_method === "mpesa" && !e.mpesa_code).length,
-    expectedCash: round2(cash + repaidCash + paidAtTillCash - refundedCash),
-    expectedMpesa: round2(mpesa + repaidMpesa + paidAtTillMpesa),
+    spentFromTill: round2(spentFromTill),
+    spentFromMpesa: round2(spentFromMpesa),
+    expenses: liveExpenses.sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    expectedCash: round2(cash + repaidCash + paidAtTillCash - refundedCash - spentFromTill),
+    expectedMpesa: round2(mpesa + repaidMpesa + paidAtTillMpesa - spentFromMpesa),
   };
 }

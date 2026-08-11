@@ -33,6 +33,7 @@ const MIGRATIONS = [
   "0010_optional_mpesa_code.sql",
   "0011_product_images.sql",
   "0012_batches_and_expiry.sql",
+  "0013_expenses.sql",
 ];
 
 const db = new PGlite();
@@ -1438,6 +1439,136 @@ expect(
     splitRows.some((r) => r.batch_id === batchA && Number(r.delta) === -6) &&
     splitRows.some((r) => r.batch_id === batchB && Number(r.delta) === -4),
   JSON.stringify(splitRows),
+);
+
+// =========================================================================
+// 0013 — expenses
+// =========================================================================
+const expenseId = "0e13ba5e-0000-4000-8000-000000000001";
+const callExpense = (payload) =>
+  as(owner, () => q("select public.sync_expense($1::jsonb)", [JSON.stringify(payload)]));
+
+const baseExpense = {
+  id: expenseId,
+  category: "rent",
+  amount: 5000,
+  paid_from: "other",
+  note: "August",
+  business_date: new Date().toISOString().slice(0, 10),
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+
+await callExpense(baseExpense);
+await db.exec("reset role;");
+expect(
+  "an expense is recorded",
+  Number((await q("select count(*) c from public.expenses where id=$1", [expenseId])).rows[0].c) === 1,
+);
+
+// Replay must not double it, and must not let a different amount through.
+await callExpense({ ...baseExpense, amount: 99999 });
+await db.exec("reset role;");
+const expenseReplay = (await q("select amount from public.expenses where id=$1", [expenseId])).rows[0];
+expect(
+  "a replay cannot rewrite the amount",
+  Number(expenseReplay.amount) === 5000,
+  `amount=${expenseReplay.amount}`,
+);
+
+// Voiding IS allowed, because a mistyped figure has to be fixable.
+await callExpense({
+  ...baseExpense,
+  voided_at: new Date().toISOString(),
+  void_reason: "Wrong month",
+  updated_at: new Date(Date.now() + 1000).toISOString(),
+});
+await db.exec("reset role;");
+expect(
+  "an expense can be voided",
+  (await q("select voided_at from public.expenses where id=$1", [expenseId])).rows[0].voided_at != null,
+);
+
+// --- owner only ------------------------------------------------------------
+await db.exec("set role authenticated;");
+let attExpense = false;
+try {
+  await as(att, () =>
+    q("select public.sync_expense($1::jsonb)", [
+      JSON.stringify({ ...baseExpense, id: "0e13ba5e-0000-4000-8000-000000000002" }),
+    ]),
+  );
+} catch {
+  attExpense = true;
+}
+await db.exec("reset role;");
+expect("an attendant cannot record an expense", attExpense);
+
+// --- the narrow update grant is the real guarantee -------------------------
+// Whatever any policy says, the column grant means amount and category cannot
+// move. A client that tries is refused by the grant, not by good manners.
+await db.exec("set role authenticated;");
+let amountUpdate = false;
+try {
+  await as(owner, () => q("update public.expenses set amount = 1 where id=$1", [expenseId]));
+} catch {
+  amountUpdate = true;
+}
+let categoryUpdate = false;
+try {
+  await as(owner, () =>
+    q("update public.expenses set category = 'airtime' where id=$1", [expenseId]),
+  );
+} catch {
+  categoryUpdate = true;
+}
+let expenseDelete = false;
+try {
+  await as(owner, () => q("delete from public.expenses where id=$1", [expenseId]));
+} catch {
+  expenseDelete = true;
+}
+await db.exec("reset role;");
+expect("an expense amount cannot be edited, even by the owner", amountUpdate);
+expect("an expense category cannot be edited either", categoryUpdate);
+expect("an expense cannot be deleted", expenseDelete);
+
+// --- shape ------------------------------------------------------------------
+let badSource = false;
+try {
+  await q(
+    `insert into public.expenses (id, shop_id, user_id, category, amount, paid_from, business_date, created_at, updated_at)
+     values (gen_random_uuid(), $1, $2, 'rent', 100, 'petty_cash_tin', current_date, now(), now())`,
+    [shop, owner],
+  );
+} catch {
+  badSource = true;
+}
+expect("an unknown payment source is rejected", badSource);
+
+// Buying stock must never become an expense category: it already flows through
+// restock into cost of goods, and counting it twice would understate profit.
+let stockCategory = false;
+try {
+  await q(
+    `insert into public.expenses (id, shop_id, user_id, category, amount, paid_from, business_date, created_at, updated_at)
+     values (gen_random_uuid(), $1, $2, 'stock', 100, 'till_cash', current_date, now(), now())`,
+    [shop, owner],
+  );
+} catch {
+  stockCategory = true;
+}
+expect("'stock' is not an expense category — that would double count", stockCategory);
+
+await db.exec("set role authenticated;");
+const otherSeesExpenses = (
+  await as(other, () => q("select count(*) c from public.expenses"))
+).rows[0].c;
+await db.exec("reset role;");
+expect(
+  "another shop cannot see these expenses",
+  Number(otherSeesExpenses) === 0,
+  `c=${otherSeesExpenses}`,
 );
 
 // --- weighted-average cost ------------------------------------------------

@@ -145,6 +145,13 @@ with checks as (
      and exists (select 1 from information_schema.columns
                   where table_schema='public' and table_name='products'
                     and column_name='track_batches')
+
+  union all
+  select '0013_expenses', 'running costs, and the drawer effect',
+         to_regclass('public.expenses') is not null
+     and exists (select 1 from pg_proc p
+                   join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='sync_expense')
 )
 
 select

@@ -7,16 +7,20 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { buildPeriod, type PeriodKind } from "@/lib/reports";
 import { productLines, tradingAccount } from "@/lib/report-detail";
 import { Button, Notice } from "@/components/ui";
+import { EXPENSE_CATEGORIES } from "@/lib/types";
 import { money, qty, todayInNairobi } from "@/lib/format";
 
 /**
- * The trading account.
+ * The profit and loss account.
  *
- * Deliberately not titled "profit and loss". A P&L ends in net profit after
- * rent, salaries, electricity and licences — none of which this app records.
- * Inventing them would be worse than omitting them, and a bottom line the owner
- * half-trusts is more dangerous than one they know the limits of. Every figure
- * below is measured from records the shop already keeps.
+ * It earned that title when expenses started being recorded. Before that it
+ * stopped at trading profit and said so, because a bottom line missing rent
+ * and wages is worse than no bottom line at all.
+ *
+ * Every figure is measured from records the shop keeps — nothing estimated,
+ * apportioned or accrued. An expense counts on the day it was paid, which is
+ * how a duka actually thinks about money and avoids inventing a precision the
+ * records do not have.
  *
  * Each line opens into what it is made of, because a total nobody can take
  * apart is a total nobody acts on.
@@ -42,7 +46,7 @@ function TradingReport() {
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 lg:p-6">
       <div className="no-print flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h1 className="text-2xl font-bold lg:text-3xl">Trading account</h1>
+          <h1 className="text-2xl font-bold lg:text-3xl">Profit &amp; loss</h1>
           <p className="text-sm text-muted">{period.label}</p>
         </div>
         <Link href="/reports">
@@ -124,15 +128,74 @@ function TradingReport() {
           <Row label="less Bad debts written off" value={-acc.badDebt} muted />
         </div>
 
-        <Row label="TRADING PROFIT" value={acc.tradingProfit} strong rule big />
+        <Row label="TRADING PROFIT" value={acc.tradingProfit} strong rule />
+
+        <div className="mt-2">
+          <Row
+            label="less Running costs"
+            value={-acc.expensesTotal}
+            muted
+            onClick={() => setOpen(open === "exp" ? null : "exp")}
+            expanded={open === "exp"}
+          />
+          {open === "exp" && (
+            <Detail>
+              {acc.expenses.length === 0 ? (
+                <p className="text-sm text-muted">
+                  No expenses recorded in this period. If the shop paid rent, wages or transport
+                  and they are not here, the figure below is flattering.
+                </p>
+              ) : (
+                <ul className="flex flex-col divide-y divide-line">
+                  {acc.expenses.map((g) => (
+                    <li key={g.category} className="flex justify-between gap-2 py-1.5 text-sm">
+                      <span className="min-w-0 truncate">
+                        {EXPENSE_CATEGORIES.find((c) => c.key === g.category)?.label ?? g.category}
+                        <span className="ml-1 text-muted">
+                          ({g.count} {g.count === 1 ? "entry" : "entries"})
+                        </span>
+                      </span>
+                      <span className="tabular shrink-0">{money(g.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <Link
+                href="/expenses"
+                className="mt-2 inline-block text-sm text-brand-dark underline"
+              >
+                Record or review expenses
+              </Link>
+            </Detail>
+          )}
+        </div>
+
+        <Row label="NET PROFIT" value={acc.netProfit} strong rule big />
       </div>
 
-      {/* The honesty that makes the number usable rather than misleading. */}
-      <Notice tone="warn">
-        This is not a full profit and loss account. Rent, salaries, electricity, licences and
-        other running costs are not recorded anywhere in this app, so they are not in the figure
-        above. What it does show is measured, not estimated.
-      </Notice>
+      {/* Honest about what it is, and about what would make it wrong. */}
+      {acc.expensesTotal === 0 ? (
+        <div className="flex flex-col gap-2">
+          <Notice tone="warn">
+            No running costs are recorded for this period, so the net profit above is the same as
+            the trading profit. If the shop paid rent, wages, transport or power and none of it
+            was entered, this figure is flattering rather than wrong.
+          </Notice>
+          {/* A real target, not an inline link inside the warning: 21px of
+              underlined text is unhittable with a thumb, and the responsive
+              check refuses anything under 44px. */}
+          <Link href="/expenses" className="no-print sm:w-56">
+            <Button variant="neutral" className="w-full">
+              Record running costs
+            </Button>
+          </Link>
+        </div>
+      ) : (
+        <p className="text-sm text-muted">
+          Net profit counts every expense recorded in this period, on the day it was paid.
+          Anything not entered is not here.
+        </p>
+      )}
 
       {acc.unpricedLines > 0 && (
         <Notice tone="warn">

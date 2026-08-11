@@ -32,6 +32,7 @@ Create a project at [supabase.com](https://supabase.com), then in **SQL Editor**
 13. `supabase/migrations/0010_optional_mpesa_code.sql` — the M-Pesa code becomes optional
 14. `supabase/migrations/0011_product_images.sql` — product photos
 15. `supabase/migrations/0012_batches_and_expiry.sql` — batches, expiry dates, FEFO dispensing
+16. `supabase/migrations/0013_expenses.sql` — running costs, and the drawer effect
 10. `supabase/seed.sql` — 20 realistic duka products with opening stock
 
 **0003a/0003b, 0007a/0007b and 0009a/0009b must each be run as two separate statements**, not pasted
@@ -302,15 +303,16 @@ then the closing balance. This is the screen that settles *"the shelf says 14 an
 20"*: not with a total, but by showing every event between the two so the owner can point at the
 line where they diverged.
 
-**Trading account** — sales, less refunds, less cost of goods = gross profit; then stock losses
-and written-off debt = trading profit. Cost of goods and losses each open into their breakdown.
+**Profit & loss** — sales, less refunds, less cost of goods = gross profit; then stock losses and
+written-off debt = trading profit; then running costs = **net profit**. Cost of goods, losses and
+running costs each open into their breakdown.
 
 Two decisions in that last one are worth stating plainly:
 
-- **It is not called a profit and loss account**, because it is not one. A P&L ends in net profit
-  after rent, salaries, electricity and licences, none of which this app records. Inventing them
-  would be worse than omitting them, and the screen says so rather than leaving the owner to
-  assume. Everything it does show is measured.
+- **Nothing is estimated, apportioned or accrued.** An expense counts on the day it was paid,
+  which is how a duka actually thinks about money and avoids inventing a precision the records do
+  not have. When no expenses are recorded for a period, the screen says the figure is *flattering
+  rather than wrong* instead of quietly presenting trading profit as net profit.
 - **Losses are valued at cost, not at retail.** Marking a damaged packet up to the price it might
   have fetched overstates the loss — the shop is out what it paid for it.
 
@@ -336,6 +338,40 @@ offline, which is most of the time and precisely when they matter.
 Each row also carries a `discrepancy`: `opening + received − sold − lost − remaining`. It should
 always be zero, and if it is ever not, something wrote to `products.quantity` outside the movement
 ledger. The report says so rather than quietly balancing the row.
+
+## Expenses, and why they belong in a till app
+
+Recording rent and wages completes the P&L, which is the obvious reason. The better reason is the
+drawer.
+
+When the owner takes 2,000 out of the till to pay a boda, the count at Closing is 2,000 short —
+and **a shortfall nobody can explain is indistinguishable from theft**, which is the exact
+ambiguity this whole app exists to remove. So an expense records *where the money came from*, and
+that field is required rather than inferred:
+
+| Paid from | Effect |
+|---|---|
+| Cash from the till | Expected **cash** drops by the amount |
+| Shop M-Pesa | Expected **M-Pesa** drops by the amount |
+| Own pocket or bank | Neither moves — it still counts against profit |
+
+Closing shows what was paid out and says the expected figure already allows for it, so an honest
+owner paying for transport stops looking like a thief.
+
+**Buying stock is deliberately not a category.** It already flows through restock movements into
+cost of goods sold, and recording it again as an expense would count the same shilling twice and
+understate profit. The database rejects a `stock` category outright, and there is a test that
+proves it.
+
+**Owner only**, enforced by RLS and inside the sync function — the same reasoning as refunds.
+Money leaving with no goods coming in is the least verifiable transaction in the app, and
+"transport, 500" with 500 in the pocket is the same theft pattern as a phantom refund.
+
+**Append-only, corrected by voiding.** A mistyped 20,000 instead of 2,000 would wreck every report
+after it, so it has to be fixable — but the original stays visible, struck through, because an
+expense that can be silently rewritten is an expense nobody can audit. The guarantee is a column
+grant rather than a convention: only `voided_at`, `void_reason` and `updated_at` are grantable, so
+no client can move the amount whatever it sends.
 
 ## Batches and expiry (running this in a chemist)
 

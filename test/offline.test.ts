@@ -2266,6 +2266,123 @@ async function main() {
     `badDebt=${acc.badDebt} writeoffs=${writeoffs} reversals=${reversals.length}`,
   );
 
+  // =======================================================================
+  // Expenses — the P&L, and the drawer
+  // =======================================================================
+  const { saveExpense, voidExpense } = await import("../src/lib/store");
+
+  const beforeSpend = await dayTotals(businessDate());
+  const rent = await saveExpense({
+    category: "rent",
+    amount: 3000,
+    paid_from: "other",
+  });
+  const transport = await saveExpense({
+    category: "transport",
+    amount: 400,
+    paid_from: "till_cash",
+    note: "boda to the wholesaler",
+  });
+  const airtimeSpend = await saveExpense({
+    category: "airtime",
+    amount: 200,
+    paid_from: "mpesa",
+  });
+  const afterSpend = await dayTotals(businessDate());
+
+  // THE claim. Cash out of the till has to lower expected cash, or the count
+  // reads short by exactly this amount and an owner paying for transport is
+  // indistinguishable from a thief.
+  expect(
+    "cash taken from the till lowers expected cash",
+    afterSpend.expectedCash === round2(beforeSpend.expectedCash - 400),
+    `${afterSpend.expectedCash} vs ${beforeSpend.expectedCash}`,
+  );
+  expect(
+    "money sent from shop M-Pesa lowers expected M-Pesa",
+    afterSpend.expectedMpesa === round2(beforeSpend.expectedMpesa - 200),
+    `${afterSpend.expectedMpesa} vs ${beforeSpend.expectedMpesa}`,
+  );
+  // Rent paid from the owner's own pocket never touched the shop's money.
+  expect(
+    "an expense paid from elsewhere touches neither drawer nor M-Pesa",
+    afterSpend.expectedCash + 400 === beforeSpend.expectedCash &&
+      afterSpend.expectedMpesa + 200 === beforeSpend.expectedMpesa,
+  );
+  expect(
+    "Closing reports what was paid out, split by where it came from",
+    afterSpend.spentFromTill === 400 && afterSpend.spentFromMpesa === 200,
+    `till=${afterSpend.spentFromTill} mpesa=${afterSpend.spentFromMpesa}`,
+  );
+  expect(
+    "an expense never touches SALES figures",
+    afterSpend.cash === beforeSpend.cash && afterSpend.total === beforeSpend.total,
+  );
+
+  // --- voiding ---------------------------------------------------------------
+  await voidExpense(transport.id, "Wrong amount");
+  const afterVoid = await dayTotals(businessDate());
+  expect(
+    "voiding gives the drawer its money back",
+    afterVoid.expectedCash === beforeSpend.expectedCash,
+    `${afterVoid.expectedCash} vs ${beforeSpend.expectedCash}`,
+  );
+  expect(
+    "...but the entry stays in the record rather than being deleted",
+    (await db.expenses.get(transport.id))?.voided_at != null,
+  );
+  expect(
+    "...and it is excluded from Closing's list",
+    !afterVoid.expenses.some((e) => e.id === transport.id),
+  );
+
+  // --- the P&L ---------------------------------------------------------------
+  const plPeriod = buildPeriodFn("day", businessDate());
+  const pl = await tradingAccount(plPeriod);
+  expect(
+    "running costs count every live expense, whatever it was paid from",
+    pl.expensesTotal === 3200,
+    `${pl.expensesTotal}`,
+  );
+  expect(
+    "net profit is trading profit less running costs",
+    pl.netProfit === round2(pl.tradingProfit - pl.expensesTotal),
+    `${pl.netProfit} vs ${pl.tradingProfit} - ${pl.expensesTotal}`,
+  );
+  expect(
+    "expenses are grouped by category, biggest first",
+    pl.expenses[0].category === "rent" && pl.expenses[0].amount === 3000,
+    JSON.stringify(pl.expenses),
+  );
+  expect(
+    "a voided expense counts for nothing in the P&L",
+    !pl.expenses.some((g) => g.category === "transport"),
+    JSON.stringify(pl.expenses.map((g) => g.category)),
+  );
+  expect(
+    "buying stock is NOT an expense — it is already cost of goods",
+    pl.expenses.every((g) => (g.category as string) !== "stock"),
+  );
+
+  // --- owner only ------------------------------------------------------------
+  const ownerSess = (await metaGet<Session>(META_KEYS.session))!;
+  await metaSet(META_KEYS.session, { ...ownerSess, role: "attendant" });
+  let attSpend = false;
+  try {
+    await saveExpense({ category: "other", amount: 50, paid_from: "till_cash" });
+  } catch {
+    attSpend = true;
+  }
+  await metaSet(META_KEYS.session, ownerSess);
+  expect("an attendant cannot record an expense", attSpend);
+
+  expect(
+    "an expense queues for the server like everything else",
+    (await db.outbox.where("kind").equals("expense").count()) >= 3,
+  );
+  expect("rent was recorded against the right category", rent.category === "rent");
+  expect("airtime was recorded from M-Pesa", airtimeSpend.paid_from === "mpesa");
+
   // --- a past day is empty, and today's figures are untouched -------------
   const yesterday = businessDate(new Date(Date.now() - 86_400_000));
   const past = await dayTotals(yesterday);

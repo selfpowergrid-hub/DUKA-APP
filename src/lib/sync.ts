@@ -146,6 +146,9 @@ export function describeEntry(entry: OutboxEntry): string {
       return p.data ? "A product photo" : "A removed product photo";
     case "batch":
       return `Batch ${String(p.batch_no ?? "")} expiring ${String(p.expiry_date ?? "")}`;
+    case "expense":
+      return `Expense of KES ${Math.round(Number(p.amount ?? 0)).toLocaleString("en-KE")}` +
+        (p.category ? ` (${String(p.category)})` : "");
   }
 }
 
@@ -326,6 +329,11 @@ async function pushEntry(entry: OutboxEntry): Promise<void> {
       if (error) throw new Error(error.message);
       return;
     }
+    case "expense": {
+      const { error } = await sb.rpc("sync_expense", { p_expense: payload });
+      if (error) throw new Error(error.message);
+      return;
+    }
     case "refund": {
       const body = payload as { refund: unknown; movements: unknown };
       const { error } = await sb.rpc("sync_refund", {
@@ -395,6 +403,9 @@ export function describeSyncError(message: string): string {
     if (m.includes("categories_shop_name_unique")) return "A category with this name already exists.";
     if (m.includes("refunds_one_per_sale")) {
       return "That sale was already refunded, most likely on another device.";
+    }
+    if (m.includes("only an owner can record or void an expense")) {
+      return "Only the owner can record an expense. Ask them to do it on their phone.";
     }
     if (m.includes("only an owner can refund")) {
       return "Only the owner can refund a sale. Ask them to do it on their phone.";
@@ -569,7 +580,7 @@ async function pullRecentActivity(session: Session) {
   // Movements are keyed by created_at, not business_date.
   const sinceTs = new Date(Date.now() - HISTORY_DAYS * 86_400_000).toISOString();
 
-  const [sales, counts, movements, debts, reminders, refunds] = await Promise.all([
+  const [sales, counts, movements, debts, reminders, refunds, expenses] = await Promise.all([
     sb.from("sales").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     sb.from("cash_counts").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
     // Movements used to be pushed and never pulled back, which made the shrink
@@ -595,11 +606,22 @@ async function pullRecentActivity(session: Session) {
     // Refunds are windowed with the rest of the activity: a refund older than
     // the history window belongs to a sale this device no longer holds.
     sb.from("refunds").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
+    sb.from("expenses").select("*").eq("shop_id", session.shop_id).gte("business_date", since),
   ]);
   if (sales.error) throw new Error(sales.error.message);
   if (counts.error) throw new Error(counts.error.message);
   if (movements.error) throw new Error(movements.error.message);
   if (debts.error) throw new Error(debts.error.message);
+  if (!expenses.error && expenses.data?.length) {
+    const pendingExpenseIds = new Set(
+      (await db.outbox.where("kind").equals("expense").toArray()).map((e) => e.entity_id),
+    );
+    await db.expenses.bulkPut(
+      (expenses.data as Array<Record<string, unknown>>).filter(
+        (r) => !pendingExpenseIds.has(r.id as string),
+      ) as never,
+    );
+  }
   if (!refunds.error && refunds.data?.length) {
     const pendingRefundIds = new Set(
       (await db.outbox.where("kind").equals("refund").toArray()).map((e) => e.entity_id),

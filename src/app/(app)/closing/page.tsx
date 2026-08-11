@@ -6,6 +6,8 @@ import { db, META_KEYS } from "@/lib/db";
 import { dayTotals, saveCashCount } from "@/lib/store";
 import { Button, Input, Money, Notice, PaymentTag } from "@/components/ui";
 import { RefundSheet } from "@/components/refund-sheet";
+import Link from "next/link";
+import { EXPENSE_CATEGORIES } from "@/lib/types";
 import { formatClock, formatDay, money, todayInNairobi } from "@/lib/format";
 import { useSession } from "@/components/session-provider";
 
@@ -90,6 +92,15 @@ export default function ClosingPage() {
       );
       if (totals!.refundedCash > 0) {
         lines.push(`  cash out    ${money(totals!.refundedCash)}`);
+      }
+    }
+    if (totals!.spentFromTill > 0 || totals!.spentFromMpesa > 0) {
+      lines.push("", "Paid out:");
+      if (totals!.spentFromTill > 0) {
+        lines.push(`  from till   ${money(totals!.spentFromTill)}`);
+      }
+      if (totals!.spentFromMpesa > 0) {
+        lines.push(`  from M-Pesa ${money(totals!.spentFromMpesa)}`);
       }
     }
     if (totals!.repaidCash > 0 || totals!.repaidMpesa > 0) {
@@ -294,6 +305,45 @@ export default function ClosingPage() {
         </div>
       )}
 
+      {/* Money that left the drawer for something other than a refund. Without
+          this the count reads short by exactly this amount, and an owner who
+          paid for transport out of the till looks like a thief — which is the
+          single ambiguity this screen exists to remove. */}
+      {(totals.spentFromTill > 0 || totals.spentFromMpesa > 0) && (
+        <div className="print-plain rounded-2xl border border-line bg-surface p-4">
+          <h2 className="text-lg font-bold">Paid out today</h2>
+          <p className="mb-2 text-sm text-muted">
+            Expenses, not stock. Expected cash below already allows for these.
+          </p>
+          <dl className="flex flex-col gap-1">
+            {totals.spentFromTill > 0 && (
+              <Row label="From the till" value={<Money value={totals.spentFromTill} />} />
+            )}
+            {totals.spentFromMpesa > 0 && (
+              <Row label="From shop M-Pesa" value={<Money value={totals.spentFromMpesa} />} />
+            )}
+          </dl>
+          <ul className="mt-2 flex flex-col divide-y divide-line border-t border-line">
+            {totals.expenses.map((e) => (
+              <li key={e.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                <span className="min-w-0 truncate">
+                  {EXPENSE_CATEGORIES.find((c) => c.key === e.category)?.label ?? e.category}
+                  {e.note && <span className="text-muted"> · {e.note}</span>}
+                </span>
+                <span className="tabular shrink-0">{money(e.amount)}</span>
+              </li>
+            ))}
+          </ul>
+          {isOwner && (
+            <Link href="/expenses" className="no-print mt-2 inline-block">
+              <Button variant="ghost" className="min-h-12 px-0 text-sm">
+                Record another
+              </Button>
+            </Link>
+          )}
+        </div>
+      )}
+
       {/* The day's sales. Owner-only refunding, enforced by RLS as well as by
           this button not being rendered. */}
       {daySales && daySales.length > 0 && (
@@ -374,6 +424,8 @@ export default function ClosingPage() {
             ` It also includes ${money(totals.paidAtTillCash)} paid in cash at the counter on credit sales.`}
           {totals.refundedCash > 0 &&
             ` ${money(totals.refundedCash)} was handed back on a refund, so expected is lower by that much.`}
+          {totals.spentFromTill > 0 &&
+            ` ${money(totals.spentFromTill)} was paid out of the till for expenses, so expected is lower by that too.`}
         </p>
 
         <Input

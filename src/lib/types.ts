@@ -226,6 +226,71 @@ export interface ProductBatch {
   synced_at: string | null;
 }
 
+export type ExpenseCategory =
+  | "rent"
+  | "salaries"
+  | "transport"
+  | "utilities"
+  | "licences"
+  | "airtime"
+  | "repairs"
+  | "other";
+
+/**
+ * Where the money physically came from.
+ *
+ * This is the field that decides whether the drawer should be lighter tonight,
+ * which is why it is required rather than inferred.
+ */
+export type ExpenseSource = "till_cash" | "mpesa" | "other";
+
+export const EXPENSE_CATEGORIES: Array<{ key: ExpenseCategory; label: string; hint: string }> = [
+  { key: "rent", label: "Rent", hint: "Shop rent or ground fees" },
+  { key: "salaries", label: "Wages", hint: "What you pay staff" },
+  { key: "transport", label: "Transport", hint: "Fare, fuel, delivery, boda" },
+  { key: "utilities", label: "Power & water", hint: "Electricity, water, gas" },
+  { key: "licences", label: "Licences & fees", hint: "County permits, PPB, association" },
+  { key: "airtime", label: "Airtime & data", hint: "For the shop line" },
+  { key: "repairs", label: "Repairs", hint: "Fridge, shelving, the premises" },
+  { key: "other", label: "Something else", hint: "Anything not covered above" },
+];
+
+export const EXPENSE_SOURCES: Array<{ key: ExpenseSource; label: string; hint: string }> = [
+  {
+    key: "till_cash",
+    label: "Cash from the till",
+    hint: "The drawer will be lighter tonight, and Closing expects that",
+  },
+  { key: "mpesa", label: "Shop M-Pesa", hint: "Sent from the shop's own M-Pesa" },
+  { key: "other", label: "Own pocket or bank", hint: "Not from today's takings" },
+];
+
+/**
+ * Money spent that is not stock.
+ *
+ * Buying stock is deliberately NOT an expense here: it already flows through
+ * restock movements into cost of goods sold, and recording it twice would
+ * count the same shilling twice and understate profit.
+ *
+ * Append-only. A mistyped amount is corrected by voiding, never by editing —
+ * an expense that can be silently rewritten is an expense nobody can audit.
+ */
+export interface Expense {
+  id: string;
+  shop_id: string;
+  user_id: string;
+  category: ExpenseCategory;
+  amount: number;
+  paid_from: ExpenseSource;
+  note: string | null;
+  business_date: string;
+  voided_at: string | null;
+  void_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  synced_at: string | null;
+}
+
 export interface Staff {
   id: string;
   shop_id: string;
@@ -389,7 +454,9 @@ export type OutboxKind =
   /** A product photo, or its removal. Never money — safe to overwrite. */
   | "product_image"
   /** A batch of stock: its number and, crucially, its expiry date. */
-  | "batch";
+  | "batch"
+  /** Money spent that is not stock. Counts against profit, and often the drawer. */
+  | "expense";
 
 /**
  * Outbox kinds that represent money. Discarding one of these means a sale or a

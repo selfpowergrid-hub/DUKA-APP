@@ -592,9 +592,14 @@ export default function ReportsPage() {
                 hint="Opening balance to closing balance, movement by movement."
               />
               <DetailLink
+                href="/expenses"
+                title="Expenses"
+                hint="Rent, wages, transport and the rest. Owner only."
+              />
+              <DetailLink
                 href={`/reports/trading?period=${kind}&end=${endDate}`}
-                title="Trading account"
-                hint="Sales less cost of goods and losses. Does not include rent or salaries."
+                title="Profit & loss"
+                hint="Sales, less cost of goods, losses and running costs, down to net profit."
               />
             </div>
           </div>

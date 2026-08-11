@@ -8,6 +8,7 @@ import type {
   DebtEntry,
   DebtReminder,
   DiscardedEntry,
+  Expense,
   ProductBatch,
   ProductImage,
   Refund,
@@ -41,6 +42,7 @@ export class DukaDB extends Dexie {
   refunds!: EntityTable<Refund, "id">;
   product_images!: EntityTable<ProductImage, "product_id">;
   product_batches!: EntityTable<ProductBatch, "id">;
+  expenses!: EntityTable<Expense, "id">;
   discarded!: EntityTable<DiscardedEntry, "id">;
   outbox!: EntityTable<OutboxEntry, "seq">;
   meta!: EntityTable<{ key: string; value: unknown }, "key">;
@@ -126,6 +128,12 @@ export class DukaDB extends Dexie {
     this.version(9).stores({
       product_batches: "id, product_id, expiry_date, updated_at, [product_id+batch_no]",
     });
+
+    // v10 — expenses. Indexed by business_date because both readers ask the
+    // same question: what was spent on this day, or across these days.
+    this.version(10).stores({
+      expenses: "id, business_date, category, created_at",
+    });
   }
 }
 
@@ -174,6 +182,7 @@ export async function clearLocalData(): Promise<void> {
       db.refunds,
       db.product_images,
       db.product_batches,
+      db.expenses,
       db.discarded,
       db.outbox,
       db.meta,
@@ -195,6 +204,7 @@ export async function clearLocalData(): Promise<void> {
         db.refunds.clear(),
         db.product_images.clear(),
         db.product_batches.clear(),
+        db.expenses.clear(),
         db.discarded.clear(),
         db.outbox.clear(),
         db.meta.clear(),
