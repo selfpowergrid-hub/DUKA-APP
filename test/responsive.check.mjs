@@ -41,7 +41,9 @@ const SESSION = {
 };
 
 const NAMES = [
-  ["Unga Jogoo 2kg", "packet", 175, 200, 40, 8],
+  // A deliberately unusual unit that the units table does not carry, so the
+  // edit screen is exercised in the state a fresh device is actually in.
+  ["Unga Jogoo 2kg", "gunia", 175, 200, 40, 8],
   ["Unga Pembe 2kg", "packet", 170, 195, 30, 8],
   ["Sukari Mumias 1kg", "packet", 145, 165, 50, 10],
   ["Sukari Kabras 2kg", "packet", 290, 330, 20, 5],
@@ -267,6 +269,7 @@ for (const vp of VIEWPORTS) {
     "/products/adjust",
     "/products/history",
     "/products/restock",
+    "/products/edit?id=00000000-0000-4000-8000-000000000100",
     "/products/expiry",
     "/reports/products",
     "/reports/stock",
@@ -362,6 +365,47 @@ for (const vp of VIEWPORTS) {
       }
     }
 
+    // A <select> whose value matches no option silently shows the FIRST one,
+    // so the screen can disagree with the record while nothing errors. Checked
+    // in a real browser because that substitution is browser behaviour, not
+    // something React or a unit test would reveal.
+    // A <select> given a value that matches none of its options does NOT report
+    // an empty value — the browser snaps to the FIRST option and reports that.
+    // So the screen can confidently display "pc" for a product sold in "gunia"
+    // while nothing errors and the stored record stays correct. A test looking
+    // for an empty value never fires; the only honest check is to compare what
+    // the select shows against the record it claims to be showing.
+    const badSelects = route.startsWith("/products/edit")
+      ? await page.evaluate(async () => {
+          const id = new URL(location.href).searchParams.get("id");
+          if (!id) return [];
+          const db = await new Promise((res, rej) => {
+            const r = indexedDB.open("duka-lite");
+            r.onsuccess = () => res(r.result);
+            r.onerror = () => rej(r.error);
+          });
+          const product = await new Promise((res) => {
+            const rq = db.transaction("products", "readonly").objectStore("products").get(id);
+            rq.onsuccess = () => res(rq.result);
+            rq.onerror = () => res(null);
+          });
+          db.close();
+          if (!product) return [];
+
+          const out = [];
+          const check = (name, expected) => {
+            const el = document.querySelector(`select[name="${name}"]`);
+            if (!el) return;
+            if (el.value !== (expected ?? "")) {
+              out.push(`${name}: showing "${el.value}" for a record that says "${expected ?? ""}"`);
+            }
+          };
+          check("unit", product.unit);
+          check("category", product.category_id);
+          return out;
+        })
+      : [];
+
     // Thumbnails: count the ones that actually DECODED. A blank-looking tile
     // can mean "no photo", "photo failed to decode", or "the seed silently did
     // not land", and a screenshot cannot tell those three apart —
@@ -406,6 +450,7 @@ for (const vp of VIEWPORTS) {
       offenders: overflow.offenders,
       smallTargets: small,
       thumbs,
+      badSelects,
       errors: [...new Set(errors)].slice(0, 3),
     });
     errors.length = 0;
@@ -533,6 +578,9 @@ for (const r of report) {
   const problems = [];
   if (r.overflowPx > 0) problems.push(`H-OVERFLOW ${r.overflowPx}px ${JSON.stringify(r.offenders)}`);
   if (r.smallTargets.length) problems.push(`SMALL ${JSON.stringify(r.smallTargets)}`);
+  if (r.badSelects?.length) {
+    problems.push(`SELECT disagrees with the record: ${JSON.stringify(r.badSelects)}`);
+  }
   if (r.thumbs !== null && r.thumbs !== PRODUCT_IMAGES.length) {
     problems.push(`THUMBS expected ${PRODUCT_IMAGES.length} decoded photos, saw ${r.thumbs}`);
   }

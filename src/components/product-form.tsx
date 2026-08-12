@@ -145,6 +145,7 @@ export function ProductForm({ product }: { product?: Product }) {
           full-screen list, which is a better thumb target than a chip anyway. */}
       <Field label="Category" hint="Optional. Helps you find things once you have a lot of stock.">
         <Select
+          name="category"
           value={addingCategory ? "__new" : categoryId}
           onChange={(e) => {
             const v = e.target.value;
@@ -159,6 +160,11 @@ export function ProductForm({ product }: { product?: Product }) {
           }}
         >
           <option value="">No category</option>
+          {/* Same reasoning as the unit above: an id the list does not contain
+              would render as "No category" while the product still carried it. */}
+          {categoryId && !categories.some((c) => c.id === categoryId) && (
+            <option value={categoryId}>Current category (not synced yet)</option>
+          )}
           {categories.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -186,6 +192,7 @@ export function ProductForm({ product }: { product?: Product }) {
         }
       >
         <Select
+          name="unit"
           value={addingUnit ? "__new" : unit}
           onChange={(e) => {
             const v = e.target.value;
@@ -197,6 +204,17 @@ export function ProductForm({ product }: { product?: Product }) {
             setUnit(v as ProductUnit);
           }}
         >
+          {/* The product's own unit, when the units list does not contain it.
+              A <select> whose value matches no option silently displays the
+              FIRST one — so a product sold in "gunia" would read as "pc" on any
+              device where the units table has not synced yet, which is every
+              fresh device and any device whose units pull failed (that pull is
+              deliberately failure-swallowed so a missing table cannot stop the
+              till). The saved value was never wrong; the screen was, which is
+              worse than useless on a field the owner is checking. */}
+          {unit && !units.some((u) => u.code === unit) && (
+            <option value={unit}>{unit}</option>
+          )}
           {units.map((u) => (
             <option key={u.id} value={u.code}>
               {u.label && u.label !== u.code ? `${u.code} — ${u.label}` : u.code}
