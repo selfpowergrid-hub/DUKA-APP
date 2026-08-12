@@ -3,6 +3,7 @@
 import { db, META_KEYS, metaGet } from "./db";
 import { businessDate } from "./format";
 import type {
+  DebtEntry,
   MovementReason,
   Product,
   Refund,
@@ -158,6 +159,39 @@ export interface RefundSummary {
   pctOfSales: number;
 }
 
+/**
+ * Money that actually arrived, as opposed to what was sold.
+ *
+ * These are two different questions and conflating them is the mistake this
+ * whole app exists to avoid:
+ *
+ *   SALES answers "what left the shop, and how was it paid for". A credit sale
+ *   belongs to `credit` in full, even when the customer handed over something
+ *   at the counter — otherwise "cash sales" stops meaning "sales paid in cash"
+ *   and the three columns stop adding up to the total.
+ *
+ *   RECEIVED answers "how much money came in". Here a part-payment IS cash,
+ *   because it is physically in the drawer, and so is a debtor walking in to
+ *   clear an old book — money that belongs to no sale in this period at all.
+ *
+ * Closing has always drawn this line for a single day. This is the same line
+ * drawn across a period, so the owner never has to work out why cash sales
+ * and money taken disagree.
+ */
+export interface MoneyReceived {
+  /** From sales paid in cash at the time. */
+  cashSales: number;
+  mpesaSales: number;
+  /** Part-payments at the till plus old debt repaid. Cash and M-Pesa. */
+  fromDebtors: number;
+  /** Of which was taken at the counter on a credit sale in this period. */
+  atTill: number;
+  /** Handed back on refunds. Always cash — there is no Daraja to send with. */
+  refunded: number;
+  /** What the shop actually took: sales + debtors − refunds. */
+  total: number;
+}
+
 export interface PeriodReport {
   period: Period;
   sales: SalesTotals;
@@ -172,7 +206,39 @@ export interface PeriodReport {
   movements: MovementRow[];
   stock: StockValue;
   refunds: RefundSummary;
+  received: MoneyReceived;
   unsynced: number;
+}
+
+/**
+ * Sales paid at the time, plus everything collected from debtors, less what
+ * was handed back. See `MoneyReceived` for why this is not the same as sales.
+ */
+function moneyReceived(
+  sales: SalesTotals,
+  debtEntries: DebtEntry[],
+  refunds: Refund[],
+): MoneyReceived {
+  const payments = debtEntries.filter((e) => e.kind === "payment");
+  const fromDebtors = round2(payments.reduce((t, e) => t + e.amount, 0));
+  // A payment naming a sale was taken at the counter alongside it; one naming
+  // nothing is a debtor coming back to clear an older book.
+  const atTill = round2(
+    payments.filter((e) => e.sale_id).reduce((t, e) => t + e.amount, 0),
+  );
+  // A credit refund reverses a debt and moves no money, so it is excluded.
+  const refunded = round2(
+    refunds.filter((r) => r.settled_as === "cash").reduce((t, r) => t + r.amount, 0),
+  );
+
+  return {
+    cashSales: sales.cash,
+    mpesaSales: sales.mpesa,
+    fromDebtors,
+    atTill,
+    refunded,
+    total: round2(sales.cash + sales.mpesa + fromDebtors - refunded),
+  };
 }
 
 function summariseRefunds(rows: Refund[], grossSales: number): RefundSummary {
@@ -241,7 +307,8 @@ export async function buildReport(kind: PeriodKind, endDate: string): Promise<Pe
   // which is fine at a few thousand rows and steadily worse after that — on a
   // cheap Android phone with a year of trade it means tens of thousands of
   // rows into memory every time the period changes.
-  const [sales, prevSales, products, counts, staff, session, refunds] = await Promise.all([
+  const [sales, prevSales, products, counts, staff, session, refunds, debtEntries] =
+    await Promise.all([
     db.sales.where("business_date").anyOf(period.dates).toArray(),
     db.sales.where("business_date").anyOf(prev.dates).toArray(),
     db.products.toArray(),
@@ -249,6 +316,7 @@ export async function buildReport(kind: PeriodKind, endDate: string): Promise<Pe
     db.staff.toArray(),
     metaGet<Session>(META_KEYS.session),
     db.refunds.where("business_date").anyOf(period.dates).toArray(),
+    db.debt_entries.where("business_date").anyOf(period.dates).toArray(),
   ]);
 
   const saleIds = sales.map((s) => s.id);
@@ -411,6 +479,7 @@ export async function buildReport(kind: PeriodKind, endDate: string): Promise<Pe
     movements: [...byReason.values()].sort((a, b) => a.reason.localeCompare(b.reason)),
     stock,
     refunds: summariseRefunds(refunds, totalsOf(sales).total),
+    received: moneyReceived(totalsOf(sales), debtEntries, refunds),
     unsynced: sales.filter((s) => !s.synced_at).length,
   };
 }

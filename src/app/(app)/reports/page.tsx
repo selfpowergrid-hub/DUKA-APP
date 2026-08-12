@@ -61,7 +61,10 @@ export default function ReportsPage() {
       "",
       `Cash sales:   ${money(r.sales.cash)}`,
       `M-Pesa sales: ${money(r.sales.mpesa)}`,
-      `TOTAL:        ${money(r.sales.total)}`,
+      `On credit:    ${money(r.sales.credit)}`,
+      `TOTAL SOLD:   ${money(r.sales.total)}`,
+      "",
+      `Money in:     ${money(r.received.total)}`,
       `Sales:        ${r.sales.count}  (average ${money(r.sales.average)})`,
       "",
       `vs ${comparisonLabel(r.period.kind)}: ${delta >= 0 ? "+" : ""}${money(delta)}`,
@@ -178,7 +181,12 @@ export default function ReportsPage() {
       <div className="print-stack flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6">
         <div className="flex flex-col gap-4">
           {/* ------------------------------------------------------ sales --- */}
-          <div className="print-plain grid grid-cols-2 gap-3">
+          {/* Three cards, not two. With credit missing, cash + M-Pesa visibly
+              failed to reach the total below and the owner was left to work
+              out where the rest went. Credit is styled flat and dashed on
+              purpose: goods left, money did not, and it must never read like
+              a third place money lives. */}
+          <div className="print-plain grid grid-cols-2 gap-3 lg:grid-cols-3">
             <div className="rounded-2xl border-2 border-cash/30 bg-cash-soft p-4">
               <p className="text-sm font-semibold text-cash-dark">Cash sales</p>
               <p className="tabular text-2xl font-bold text-cash-dark lg:text-3xl">
@@ -191,6 +199,48 @@ export default function ReportsPage() {
                 {money(sales.mpesa)}
               </p>
             </div>
+            <div className="col-span-2 rounded-2xl border-2 border-dashed border-muted p-4 lg:col-span-1">
+              <p className="text-sm font-semibold text-muted">On credit</p>
+              <p className="tabular text-2xl font-bold text-muted lg:text-3xl">
+                {money(sales.credit)}
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                {sales.credit > 0 ? "Goods gone, money not here yet." : "Nothing sold on credit."}
+              </p>
+            </div>
+          </div>
+
+          {/* The question the three cards above cannot answer: how much money
+              actually arrived. A part-payment at the till and a debtor clearing
+              an old book are both real money in the drawer, and neither is a
+              sale in this period — so they belong here rather than being folded
+              into "cash sales", which would stop that column meaning what it
+              says. */}
+          <div className="print-plain rounded-2xl border border-line bg-surface p-4">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-lg font-bold">Money actually received</h2>
+              <span className="tabular text-2xl font-bold">{money(report.received.total)}</span>
+            </div>
+            <dl className="mt-2 flex flex-col gap-1 border-t border-line pt-2 text-sm">
+              <Row label="Sales paid at the time" value={money(sales.cash + sales.mpesa)} />
+              {report.received.fromDebtors > 0 && (
+                <Row
+                  label={
+                    report.received.atTill > 0
+                      ? `From debtors (${money(report.received.atTill)} of it at the till)`
+                      : "From debtors"
+                  }
+                  value={money(report.received.fromDebtors)}
+                />
+              )}
+              {report.received.refunded > 0 && (
+                <Row label="less Refunds handed back" value={`-${money(report.received.refunded)}`} />
+              )}
+            </dl>
+            <p className="mt-2 text-sm text-muted">
+              Different from total sales, and both are right: sales counts goods that left,
+              this counts money that arrived.
+            </p>
           </div>
 
           <div className="print-plain rounded-2xl border border-line bg-surface p-4">

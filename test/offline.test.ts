@@ -2557,6 +2557,102 @@ async function main() {
     JSON.stringify(anonTrace.sales[0]),
   );
 
+  // =======================================================================
+  // Sales vs money received
+  // =======================================================================
+  // Two different questions, and conflating them is the mistake this whole app
+  // exists to avoid. SALES says what left the shop and how it was paid for.
+  // RECEIVED says how much money arrived. A part-payment at the till is cash in
+  // the drawer AND a credit sale in full — both statements are true, and they
+  // belong in different columns.
+  const { buildReport: buildRpt } = await import("../src/lib/reports");
+
+  const recvProd = await saveProduct({
+    name: "Received Test Rice",
+    unit: "kg",
+    buying_price: 100,
+    selling_price: 150,
+    low_stock_threshold: 2,
+    opening_quantity: 200,
+  });
+  const recvCustomer = await saveCustomer({ name: "Received Test Debtor", phone: "0700111222" });
+
+  const beforeRpt = await buildRpt("day", businessDate());
+
+  // A credit sale of 600, with 250 handed over at the counter.
+  await checkout({
+    lines: [
+      { product_id: recvProd.id, name: recvProd.name, unit: "kg", unit_price: 150, quantity: 4 },
+    ],
+    payment_method: "credit",
+    customer_id: recvCustomer.id,
+    paid_now: 250,
+    paid_now_method: "cash",
+  });
+
+  const afterRpt = await buildRpt("day", businessDate());
+
+  // The sales side: the whole 600 is a credit sale. Splitting it would make
+  // "cash sales" stop meaning "sales paid in cash".
+  expect(
+    "a part-paid credit sale counts in full as credit, not split across columns",
+    afterRpt.sales.credit - beforeRpt.sales.credit === 600 &&
+      afterRpt.sales.cash === beforeRpt.sales.cash,
+    `credit+${afterRpt.sales.credit - beforeRpt.sales.credit} cash=${afterRpt.sales.cash}`,
+  );
+  expect(
+    "the three columns still add up to total sales",
+    afterRpt.sales.total ===
+      round2(afterRpt.sales.cash + afterRpt.sales.mpesa + afterRpt.sales.credit),
+    `${afterRpt.sales.total}`,
+  );
+
+  // The money side: the 250 is real cash and must be counted as received.
+  expect(
+    "the 250 taken at the till counts as money received",
+    afterRpt.received.total - beforeRpt.received.total === 250,
+    `${afterRpt.received.total} vs ${beforeRpt.received.total}`,
+  );
+  expect(
+    "...and is reported as taken at the till, not as an old debt repaid",
+    afterRpt.received.atTill - beforeRpt.received.atTill === 250,
+    `atTill=${afterRpt.received.atTill}`,
+  );
+
+  // An old debt cleared later is money in, belonging to no sale in this period.
+  const midRpt = await buildRpt("day", businessDate());
+  await recordDebtEntry({
+    customer_id: recvCustomer.id,
+    kind: "payment",
+    amount: 350,
+    payment_method: "mpesa",
+    mpesa_code: "RCVTEST01",
+  });
+  const paidRpt = await buildRpt("day", businessDate());
+
+  expect(
+    "an old debt repaid raises money received but not sales",
+    paidRpt.received.total - midRpt.received.total === 350 &&
+      paidRpt.sales.total === midRpt.sales.total,
+    `received+${paidRpt.received.total - midRpt.received.total} sales=${paidRpt.sales.total}`,
+  );
+  expect(
+    "money received never equals total sales once credit is involved",
+    paidRpt.received.total !== paidRpt.sales.total,
+    `received=${paidRpt.received.total} sales=${paidRpt.sales.total}`,
+  );
+  expect(
+    "the components add up to the stated total",
+    paidRpt.received.total ===
+      round2(
+        paidRpt.received.cashSales +
+          paidRpt.received.mpesaSales +
+          paidRpt.received.fromDebtors -
+          paidRpt.received.refunded,
+      ),
+    JSON.stringify(paidRpt.received),
+  );
+
   // --- a past day is empty, and today's figures are untouched -------------
   const yesterday = businessDate(new Date(Date.now() - 86_400_000));
   const past = await dayTotals(yesterday);
