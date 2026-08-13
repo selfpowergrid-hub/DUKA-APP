@@ -200,6 +200,13 @@ now offer it. Chrome and Edge get a real Install button from the `beforeinstallp
 Safari never fires that and has no API, so it gets the Share → Add to Home Screen steps rather
 than a button that could not work; an already-installed device is told so instead.
 
+**Installing needs a PRODUCTION build.** The service worker registers only when
+`NODE_ENV=production`, because a caching worker during development hides your own edits — and
+Chrome will not offer to install without one. So `npm run dev` can never show an install button,
+which looks exactly like a broken feature. Use `npm run build && npm start`, or the deployed
+address. The install panel now says which of the two requirements is missing — no service worker,
+or not a secure address — rather than leaving you to guess.
+
 The manifest also stopped locking `orientation: portrait`, which made the installed app awkward on
 a tablet held sideways and wrong on a laptop. The test asserts it stays unlocked.
 

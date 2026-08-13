@@ -397,6 +397,14 @@ export const HELP: HelpSection[] = [
         ],
         keywords: "install android iphone ipad windows laptop chrome safari edge",
       },
+      {
+        q: "There is no Install button",
+        a: [
+          "A browser only offers to install over a secure address — https, or localhost on the same machine. Opening the app by typing another computer's IP address will not offer it.",
+          "Use the address the shop was given, not a numbered address on the network. Settings will tell you which of the two is missing if it still does not appear.",
+        ],
+        keywords: "no install button missing cannot install https secure",
+      },
     ],
   },
   {

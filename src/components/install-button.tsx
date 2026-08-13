@@ -53,6 +53,35 @@ function useStandalone(): boolean {
 
 const NO_CHANGE = () => () => {};
 
+/**
+ * Whether a service worker is registered.
+ *
+ * Chrome will not offer to install without one, and this app deliberately
+ * registers it only in production builds — a caching worker during development
+ * hides your own edits. So on `npm run dev` no install button can ever appear,
+ * which looks exactly like a broken feature unless the page says otherwise.
+ * That is what this exists to distinguish.
+ */
+function useHasServiceWorker(): boolean | null {
+  const [has, setHas] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    // Always asynchronous, never a synchronous set inside the effect: the
+    // "no serviceWorker at all" branch would otherwise set state during the
+    // effect itself, which cascades a second render for no reason.
+    const answer = ("serviceWorker" in navigator)
+      ? navigator.serviceWorker.getRegistrations().then((r) => r.length > 0)
+      : Promise.resolve(false);
+    answer.catch(() => false).then((v) => {
+      if (live) setHas(v);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return has;
+}
+
 /** iPadOS reports itself as a Mac, so a Mac with a touchscreen is an iPad. */
 function useIsIos(): boolean {
   return useSyncExternalStore(
@@ -70,7 +99,9 @@ export function InstallButton() {
   const [busy, setBusy] = useState(false);
   const standalone = useStandalone();
   const isIos = useIsIos();
+  const hasSW = useHasServiceWorker();
   const installed = standalone || dismissed;
+  const secure = typeof window !== "undefined" ? window.isSecureContext : true;
 
   useEffect(() => {
     const onPrompt = (e: Event) => {
@@ -124,6 +155,39 @@ export function InstallButton() {
         </Button>
         <p className="text-sm text-muted">
           It goes on your home screen, opens without the browser bar, and works with no internet.
+        </p>
+      </div>
+    );
+  }
+
+  // Neither of the two hard requirements can be fudged, and both fail silently.
+  // Saying which one is missing turns "the button never appears" into something
+  // actionable.
+  if (!isIos && (hasSW === false || !secure)) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Notice tone="warn">
+          This copy of the app cannot be installed yet, and here is why.
+        </Notice>
+        <ul className="ml-5 flex list-disc flex-col gap-1 text-sm">
+          {!secure && (
+            <li>
+              It is being served over plain <code>http://</code> to an address that is not
+              localhost. Browsers only allow installing over <code>https://</code>. Use the
+              deployed address rather than a bare IP on the network.
+            </li>
+          )}
+          {hasSW === false && secure && (
+            <li>
+              No service worker is running. This app registers one only in a production build, so
+              a development server can never offer to install. Run{" "}
+              <code>npm run build</code> then <code>npm start</code>, or use the deployed address.
+            </li>
+          )}
+        </ul>
+        <p className="text-sm text-muted">
+          Nothing is wrong with the app itself — everything else works exactly the same either
+          way.
         </p>
       </div>
     );
