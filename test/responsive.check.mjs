@@ -283,13 +283,22 @@ for (const vp of VIEWPORTS) {
     await page.waitForTimeout(700);
 
     // Build a cart on the Sell screen so the till panel is exercised.
+    //
+    // TEN distinct lines, not two. The cart list caps at 45vh with its own
+    // scroll, and the picker at 38dvh, so the page only grows past the viewport
+    // once the cart list reaches its cap. Below that everything fits, the
+    // buried-content check has nothing to find, and it passes whether the
+    // layout is right or not — which is exactly what it did at two lines, and
+    // still did at six. A real sale is several items anyway.
     if (route === "/sell") {
       const tiles = page.locator("main button", { hasText: "KES" });
       const n = await tiles.count();
       if (n > 2) {
-        await tiles.nth(0).click();
-        await tiles.nth(0).click();
-        await tiles.nth(2).click();
+        for (let i = 0; i < Math.min(10, n); i++) {
+          await tiles.nth(i).click();
+          await page.waitForTimeout(120);
+        }
+        await tiles.nth(0).click(); // a second unit, so a line shows a count
         await page.waitForTimeout(400);
       }
     }
@@ -328,6 +337,77 @@ for (const vp of VIEWPORTS) {
 
     const slug = route.replace(/[\/?=]/g, "_") || "_root";
     await page.screenshot({ path: `${OUT}/${vp.name}${slug}.png`, fullPage: false });
+
+    // Does the page reserve enough room below its content for the fixed bars?
+    //
+    // This is the invariant, and it is what the bug actually was: `main`
+    // reserved 112px of bottom padding while the nav plus the running-total bar
+    // occupied 147, so the last 35px could never be scrolled clear. The suite
+    // was blind to it — buried content neither overflows nor is undersized, so
+    // both existing checks passed while a real phone showed the cart panel cut
+    // in half.
+    //
+    // Stated as `reserved >= furniture` rather than by hunting for covered
+    // elements, which three earlier attempts got wrong in three different ways:
+    // comparing rectangles flagged every scrollable page (content below the
+    // fold is further down, not buried); doing it after scrolling to the bottom
+    // still flagged tiles inside the picker's own scroll area (clipped by their
+    // container, not by a bar); and hit-testing missed it entirely, because the
+    // element a bar actually overlaps is a wrapper rather than a leaf.
+    //
+    // Measured HERE, before the checkout walk below, because the pinned total
+    // only exists during the cart stage — afterwards there is no bar at all and
+    // the check would pass without ever having looked.
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(350);
+    const barGap = await page.evaluate(() => {
+      const vh = window.innerHeight;
+      const bars = [...document.querySelectorAll("body *")].filter((el) => {
+        if (getComputedStyle(el).position !== "fixed") return false;
+        const r = el.getBoundingClientRect();
+        // NOT `bottom >= vh`: bars stack. The running total sits at bottom-16,
+        // 64px clear of the floor, and requiring a flush edge missed it —
+        // which made the whole check measure the nav alone and pass.
+        return r.height > 0 && r.top > vh / 2 && r.bottom > vh * 0.6;
+      });
+      if (!bars.length) return null;
+      const furniture = Math.round(vh - Math.min(...bars.map((b) => b.getBoundingClientRect().top)));
+
+      // The lowest point any real content reaches, in document coordinates.
+      // "Real" means painted where it claims to be: an element scrolled out of
+      // its own container fails the hit test and is skipped, which is what
+      // keeps the capped product picker from counting.
+      const y = window.scrollY;
+      let lowest = 0;
+      for (const el of document.querySelectorAll("main *")) {
+        if (el.children.length > 0) continue;
+        const t = (el.textContent || "").trim();
+        if (!t) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          if (getComputedStyle(n).position === "fixed") { r.painted = false; break; }
+        }
+        if (r.painted === false) continue;
+        const cx = Math.min(Math.max(r.left + r.width / 2, 1), window.innerWidth - 1);
+        const cy = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+        const hit = document.elementFromPoint(cx, cy);
+        if (!hit || (hit !== el && !el.contains(hit) && !hit.contains(el))) continue;
+        lowest = Math.max(lowest, r.bottom + y);
+      }
+
+      return {
+        furniture,
+        reserved: Math.round(document.documentElement.scrollHeight - lowest),
+      };
+    });
+    // A bar may cover the very bottom of the page only if the page keeps that
+    // much empty room beneath its last content.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const barShortfall =
+      barGap && barGap.reserved < barGap.furniture
+        ? `reserves ${barGap.reserved}px below the content but the fixed bars occupy ${barGap.furniture}px`
+        : null;
 
     // Walk the checkout steps too — that is where the layout differs most
     // between a phone (full-bleed step) and a desktop (side panel).
@@ -451,6 +531,7 @@ for (const vp of VIEWPORTS) {
       smallTargets: small,
       thumbs,
       badSelects,
+      barShortfall,
       errors: [...new Set(errors)].slice(0, 3),
     });
     errors.length = 0;
@@ -578,6 +659,9 @@ for (const r of report) {
   const problems = [];
   if (r.overflowPx > 0) problems.push(`H-OVERFLOW ${r.overflowPx}px ${JSON.stringify(r.offenders)}`);
   if (r.smallTargets.length) problems.push(`SMALL ${JSON.stringify(r.smallTargets)}`);
+  if (r.barShortfall) {
+    problems.push(`BURIED: the page ${r.barShortfall}`);
+  }
   if (r.badSelects?.length) {
     problems.push(`SELECT disagrees with the record: ${JSON.stringify(r.badSelects)}`);
   }

@@ -273,6 +273,10 @@ export default function SellPage() {
   const hasPom = pomInCart.length > 0;
   const rxReady = patient.trim().length > 0 && prescriber.trim().length > 0;
 
+  // Drives the phone layout: once there is a sale in progress, the picker
+  // gives up room to it.
+  const cartHasItems = stage === "cart" && lines.length > 0;
+
   const partNum = Number(paidNow) || 0;
   // Blocks the button rather than failing at checkout, and says the useful
   // thing: a "part"-payment that covers everything is just a cash sale.
@@ -334,7 +338,26 @@ export default function SellPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3 px-4 pb-4 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] lg:px-0">
+        {/* Two things happen on a phone once the cart has something in it.
+
+            The tiles shrink — 7rem instead of 9.5rem — so roughly twice as
+            many products are reachable without scrolling. Finding the next
+            item is the most repeated action at a till, and every scroll is
+            a customer waiting.
+
+            And the grid stops growing, capping at about a third of the
+            screen with its own scroll, so the running sale below it stays on
+            screen instead of being pushed off by a long catalogue. An empty
+            cart keeps the full height, because there is nothing underneath
+            worth protecting. Desktop is untouched: it has a side panel and
+            no shortage of room. */}
+        <div
+          className={`grid gap-2 px-4 pb-4 sm:gap-3 lg:px-0 lg:pb-0 ${
+            cartHasItems
+              ? "max-h-[38dvh] grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] overflow-y-auto overscroll-contain sm:grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] lg:max-h-none lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] lg:overflow-visible"
+              : "grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]"
+          }`}
+        >
           {filtered.map((p) => {
             const measures = portionsByProduct.get(p.id) ?? [];
             const carted = lines
@@ -348,7 +371,7 @@ export default function SellPage() {
                   onClick={() =>
                     measures.length ? setOpenPortions(open ? null : p.id) : addProduct(p)
                   }
-                  className={`relative flex min-h-32 w-full flex-col justify-between gap-2 rounded-2xl border-2 p-3.5 text-left shadow-sm transition-all active:scale-[0.97] active:shadow-none lg:hover:-translate-y-0.5 lg:hover:border-brand lg:hover:shadow-md ${
+                  className={`relative flex min-h-24 w-full flex-col justify-between gap-1.5 rounded-2xl border-2 p-2.5 text-left shadow-sm sm:min-h-32 sm:gap-2 sm:p-3.5 transition-all active:scale-[0.97] active:shadow-none lg:hover:-translate-y-0.5 lg:hover:border-brand lg:hover:shadow-md ${
                     carted ? "border-brand bg-brand-soft shadow-md" : "border-line bg-surface"
                   }`}
                 >
@@ -382,7 +405,7 @@ export default function SellPage() {
                       </span>
                     )}
                     <span
-                      className={`line-clamp-2 min-w-0 text-base leading-snug font-semibold ${
+                      className={`line-clamp-2 min-w-0 text-sm leading-snug font-semibold sm:text-base ${
                         carted > 0 && !photos.get(p.id) ? "pr-8" : ""
                       }`}
                     >
@@ -391,7 +414,7 @@ export default function SellPage() {
                   </span>
 
                   <span className="flex items-end justify-between gap-2">
-                    <span className="tabular text-xl leading-none font-bold">
+                    <span className="tabular text-lg leading-none font-bold sm:text-xl">
                       {measures.length
                         ? `${money(Math.min(...measures.map((m) => m.price)))}+`
                         : money(p.selling_price)}
@@ -1030,7 +1053,19 @@ export default function SellPage() {
       </aside>
 
       {/* Pinned running total — phone and tablet only. Always visible, always
-          large, never scrolls away. */}
+          large, never scrolls away.
+
+          The spacer above it is not decoration. `main` reserves a fixed
+          `pb-28` (112px), but the furniture at the bottom of a phone is the
+          nav (65px) PLUS this bar (83px, and taller when the total wraps) —
+          147px. The last 35px of the page was therefore permanently hidden,
+          including the top of the cart panel itself. A hardcoded padding can
+          never be right for a bar whose height depends on its contents, so an
+          in-flow spacer of the same height reserves exactly as much room as
+          the bar actually takes. */}
+      {stage === "cart" && lines.length > 0 && (
+        <div aria-hidden className="h-24 lg:hidden" />
+      )}
       {stage === "cart" && lines.length > 0 && (
         <div className="fixed inset-x-0 bottom-16 z-[8] mx-auto max-w-3xl border-t border-line bg-surface px-4 py-3 shadow-[0_-4px_16px_rgba(20,24,31,0.06)] lg:hidden">
           <div className="flex items-center gap-3">
