@@ -17,8 +17,9 @@
     "test:contrast": "node test/contrast.check.mjs",
     "test:migration-check": "node test/migration-check.test.mjs",
     "test:tenancy": "node test/tenancy.test.mjs",
+    "test:help": "node test/help-and-letterhead.test.mjs",
     "test:repair-0003b": "node test/repair-0003b.test.mjs",
-    "test": "npm run test:schema && npm run test:repair-0003b && npm run test:tenancy && npm run test:migration-check && npm run test:offline && npm run test:contrast",
+    "test": "npm run test:help && npm run test:schema && npm run test:repair-0003b && npm run test:tenancy && npm run test:migration-check && npm run test:offline && npm run test:contrast",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
     "prepare:sw": "node scripts/build-sw.mjs"
   },

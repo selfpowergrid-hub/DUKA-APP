@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useLiveQuery } from "dexie-react-hooks";
 import { batchTrace, findBatches, type ExpiryState } from "@/lib/batches";
 import { Button, Input, Notice } from "@/components/ui";
+import { ReportHeader } from "@/components/report-header";
 import { formatClock, formatDay, money, qty } from "@/lib/format";
 
 /**
@@ -34,8 +35,12 @@ export default function BatchLookupPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 lg:p-6">
+      <ReportHeader
+        title="Batch lookup"
+        period={trace ? `${trace.productName} · batch ${trace.batch.batch_no}` : undefined}
+      />
+
       <div className="no-print">
-        <h1 className="text-2xl font-bold lg:text-3xl">Find a batch</h1>
         <p className="mt-1 text-sm text-muted">
           For a recall notice, or to check where a specific carton went. Spaces and dashes are
           ignored, so it will match however it was typed in.

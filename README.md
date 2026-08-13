@@ -173,6 +173,36 @@ server-side runtime to configure.
 
 ---
 
+## Letterheads, help, and installing
+
+**Every printable report carries a letterhead** — shop name, report title, the days it covers,
+and when and by whom it was printed. A printout leaves the app: it is handed to a supplier, filed,
+or read weeks later by someone who was not there, and a column of figures headed "Products"
+answers none of the questions such a reader has. The failure was invisible on screen, because the
+rail carrying the shop name is `no-print` while the report sub-pages marked their own titles
+`no-print` too — so a printed page had no title at all. `npm run test:help` requires every screen
+offering a Print button to carry it.
+
+**Help lives inside the app**, at `/help`, for the same reason the till does: the moment you need
+it is the moment you have no bundle. Forty-one topics across eleven sections, written as questions
+a shopkeeper would actually ask — "my drawer is short and I do not know why", not "cash variance
+reconciliation" — with the steps first and the reasoning after. Search comes first because
+somebody opening help is stuck rather than studying, and each topic carries extra keywords so a
+shopkeeper's word finds a topic written in different words: "deni" reaches the credit pages.
+
+It is deliberately honest about what the app does not do. A help page that only lists features
+leaves the reader to discover the limits at the counter, which is the worst possible moment.
+
+**The app installs** to a phone, tablet, laptop or desktop. It always could — manifest, service
+worker and icons have been there since early on — but installable and *discoverable* are
+different things, and nobody installs an app they were never told they could. Settings and Help
+now offer it. Chrome and Edge get a real Install button from the `beforeinstallprompt` event; iOS
+Safari never fires that and has no API, so it gets the Share → Add to Home Screen steps rather
+than a button that could not work; an already-installed device is told so instead.
+
+The manifest also stopped locking `orientation: portrait`, which made the installed app awkward on
+a tablet held sideways and wrong on a laptop. The test asserts it stays unlocked.
+
 ## Many shops, one database
 
 Every client signs up on their own and gets their own shop. Nothing is shared between them, and

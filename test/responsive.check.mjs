@@ -278,6 +278,7 @@ for (const vp of VIEWPORTS) {
     "/products/batches",
     "/reports/dispensing",
     "/settings",
+    "/help",
   ]) {
     await page.goto(`${BASE}${route}`, { waitUntil: "networkidle" });
     await page.waitForTimeout(700);

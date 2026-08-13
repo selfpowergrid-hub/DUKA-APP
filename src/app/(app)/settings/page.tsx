@@ -16,6 +16,8 @@ import {
 } from "@/lib/sync";
 import { reminderTemplate, saveReminderTemplate } from "@/lib/store";
 import { DEFAULT_TEMPLATE, shareText, TEMPLATE_TOKENS } from "@/lib/remind";
+import Link from "next/link";
+import { InstallButton } from "@/components/install-button";
 import { useSession } from "@/components/session-provider";
 import { Button, Field, Input, Notice } from "@/components/ui";
 import type { OutboxKind } from "@/lib/types";
@@ -119,6 +121,26 @@ export default function SettingsPage() {
           {session?.full_name ?? session?.email}{" "}
           <span className="font-normal text-muted">({session?.role})</span>
         </p>
+      </div>
+
+      {/* Two things every shop needs and nobody goes looking for: how the app
+          works, and the fact that it can be installed at all. */}
+      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4">
+        <h2 className="text-lg font-bold">Help</h2>
+        <p className="text-sm text-muted">
+          How the app works, in the order things come up. It works with no internet, so it is
+          there when you actually need it.
+        </p>
+        <Link href="/help">
+          <Button variant="neutral" className="sm:w-56">
+            Open help
+          </Button>
+        </Link>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4">
+        <h2 className="text-lg font-bold">Install the app</h2>
+        <InstallButton />
       </div>
 
       {session?.role === "owner" && (

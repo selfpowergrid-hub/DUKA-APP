@@ -8,6 +8,7 @@ import { buildPeriod, type PeriodKind } from "@/lib/reports";
 import { productLines } from "@/lib/report-detail";
 import { stockCard } from "@/lib/report-detail";
 import { Button, Money, Notice } from "@/components/ui";
+import { ReportHeader } from "@/components/report-header";
 import { formatDay, money, qty, todayInNairobi } from "@/lib/format";
 import { MOVEMENT_LABELS } from "@/lib/types";
 
@@ -42,17 +43,21 @@ function ProductsReport() {
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 lg:p-6">
-      <div className="no-print flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-bold lg:text-3xl">Products</h1>
-          <p className="text-sm text-muted">{period.label}</p>
-        </div>
-        <Link href="/reports">
-          <Button variant="ghost" className="min-h-12">
-            Back to reports
+      {/* The back link sits ABOVE the letterhead rather than beside it: the
+          letterhead has to span the page and survive printing, and this does
+          not print at all. */}
+      <div className="no-print">
+        {/* inline-block on the anchor itself: an inline <a> collapses to the
+            line height, so the tap target was 21px even though the button
+            inside it was 48. It used to be stretched by a flex parent. */}
+        <Link href="/reports" className="inline-block">
+          <Button variant="ghost" className="min-h-12 px-0">
+            ← Back to reports
           </Button>
         </Link>
       </div>
+
+      <ReportHeader title="Products" period={period.label} />
 
       <div className="print-plain grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Card label="Sales" value={money(totals.revenue)} />

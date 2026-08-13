@@ -70,6 +70,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <div className="border-t border-line px-3 py-2">
           <SyncIndicator />
+          {/* Help is deliberately here rather than in the tab list: it is not
+              a place you go to work, it is a place you go when stuck, and it
+              must not cost the till a tab. */}
+          <Link
+            href="/help"
+            className="flex min-h-12 items-center px-3 text-sm text-muted hover:text-ink"
+          >
+            Help
+          </Link>
           <Link
             href="/settings"
             className="flex min-h-12 items-center px-3 text-sm text-muted hover:text-ink"
@@ -89,7 +98,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {session?.shop_name ?? "Duka Lite"}
               </span>
             </Link>
-            <SyncIndicator />
+            <span className="flex items-center gap-1">
+              <Link
+                href="/help"
+                aria-label="Help"
+                className="flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold text-muted"
+              >
+                ?
+              </Link>
+              <SyncIndicator />
+            </span>
           </div>
         </header>
 

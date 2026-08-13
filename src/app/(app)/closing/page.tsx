@@ -5,6 +5,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { db, META_KEYS } from "@/lib/db";
 import { dayTotals, saveCashCount } from "@/lib/store";
 import { Button, Input, Money, Notice, PaymentTag } from "@/components/ui";
+import { ReportHeader } from "@/components/report-header";
 import { RefundSheet } from "@/components/refund-sheet";
 import Link from "next/link";
 import { EXPENSE_CATEGORIES } from "@/lib/types";
@@ -159,8 +160,9 @@ export default function ClosingPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl p-4 lg:p-6">
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-2xl font-bold lg:text-3xl">Closing</h1>
+      <ReportHeader title="Closing" period={formatDay(date)} />
+
+      <div className="no-print mb-4 flex flex-wrap items-baseline justify-end gap-3">
         <div className="flex items-center gap-3">
           {!isToday && <span className="text-sm text-muted">past day</span>}
           <input

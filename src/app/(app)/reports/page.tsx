@@ -8,6 +8,7 @@ import { buildReport, comparisonLabel, type PeriodKind } from "@/lib/reports";
 import { chaseList, debtTotals, AGE_BUCKETS } from "@/lib/debt";
 import { REFUND_REASONS } from "@/lib/types";
 import { Button, Money, Notice } from "@/components/ui";
+import { ReportHeader } from "@/components/report-header";
 import { formatDay, money, qty, todayInNairobi } from "@/lib/format";
 import { MOVEMENT_LABELS } from "@/lib/types";
 import { useSession } from "@/components/session-provider";
@@ -109,8 +110,16 @@ export default function ReportsPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl p-4 lg:p-6">
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-2xl font-bold lg:text-3xl">Reports</h1>
+      <ReportHeader
+        title="Reports"
+        period={
+          report.period.kind === "day"
+            ? formatDay(report.period.to)
+            : `${report.period.label} · ${formatDay(report.period.from)} to ${formatDay(report.period.to)}`
+        }
+      />
+
+      <div className="no-print mb-4 flex flex-wrap items-baseline justify-end gap-3">
         <input
           type="date"
           value={endDate}
@@ -135,12 +144,6 @@ export default function ReportsPage() {
           </button>
         ))}
       </div>
-
-      <p className="mb-4 text-sm text-muted">
-        {report.period.kind === "day"
-          ? formatDay(report.period.to)
-          : `${report.period.label} · ${formatDay(report.period.from)} to ${formatDay(report.period.to)}`}
-      </p>
 
       {/* Navigation, so it sits where navigation belongs: above the summary
           rather than beneath a screenful of it. These are the only useful
