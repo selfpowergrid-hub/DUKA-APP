@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { signUpOwner } from "@/lib/auth";
-import { Button, Field, Input, Notice, Spinner } from "@/components/ui";
+import { Button, Field, Input, Notice, PasswordInput, Spinner } from "@/components/ui";
 
 export default function SignupPage() {
   const [shopName, setShopName] = useState("");
@@ -70,8 +70,7 @@ export default function SignupPage() {
             />
           </Field>
           <Field label="Password" hint="At least 6 characters.">
-            <Input
-              type="password"
+            <PasswordInput
               minLength={6}
               required
               value={password}

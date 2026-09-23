@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "@/lib/auth";
 import { useSession } from "@/components/session-provider";
-import { Button, Field, Input, Notice, Spinner } from "@/components/ui";
+import { Button, Field, Input, Notice, PasswordInput, Spinner } from "@/components/ui";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -49,8 +49,7 @@ export default function LoginPage() {
         </Field>
 
         <Field label="Password">
-          <Input
-            type="password"
+          <PasswordInput
             autoComplete="current-password"
             required
             value={password}

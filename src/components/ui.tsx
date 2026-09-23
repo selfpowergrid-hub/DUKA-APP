@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { money } from "@/lib/format";
 import type { PaymentMethod } from "@/lib/types";
@@ -109,6 +110,38 @@ export function Input({ className = "", ...props }: InputHTMLAttributes<HTMLInpu
       {...props}
       className={`min-h-12 w-full rounded-xl border border-line bg-surface px-4 text-base text-ink outline-none focus:border-brand focus:ring-2 focus:ring-brand/25 ${className}`}
     />
+  );
+}
+
+/**
+ * A password box with a Show/Hide button, so a mistyped password can be
+ * checked before signing in instead of after a "wrong password".
+ *
+ * A word, not an eye icon: it reads the same to everyone and needs no asset.
+ * The browser's own reveal button (Edge) is hidden so there are never two.
+ */
+export function PasswordInput({ className = "", ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <Input
+        {...props}
+        type={visible ? "text" : "password"}
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        className={`pr-20 [&::-ms-reveal]:hidden ${className}`}
+      />
+      <button
+        type="button"
+        onClick={() => setVisible((v) => !v)}
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+        className="absolute inset-y-0 right-0 flex min-h-12 min-w-16 items-center justify-center rounded-r-xl px-3 text-sm font-semibold text-muted outline-none focus-visible:ring-2 focus-visible:ring-brand active:text-ink lg:hover:text-ink"
+      >
+        {visible ? "Hide" : "Show"}
+      </button>
+    </div>
   );
 }
 
