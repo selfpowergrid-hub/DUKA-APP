@@ -47,12 +47,28 @@ export async function signUpOwner(args: {
   fullName: string;
 }): Promise<void> {
   const sb = supabase();
-  const { error } = await sb.auth.signUp({
-    email: args.email.trim().toLowerCase(),
+  const emailClean = args.email.trim().toLowerCase();
+  const { data, error } = await sb.auth.signUp({
+    email: emailClean,
     password: args.password,
     options: {
       data: { shop_name: args.shopName.trim(), full_name: args.fullName.trim() },
     },
+  });
+  if (error) throw new Error(friendlyAuthError(error.message));
+
+  // Supabase returns a user with an empty identities array when email enumeration
+  // protection is enabled and the email is already registered.
+  if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error("This email is already registered. Please sign in instead.");
+  }
+}
+
+export async function resendConfirmationEmail(email: string): Promise<void> {
+  const sb = supabase();
+  const { error } = await sb.auth.resend({
+    type: "signup",
+    email: email.trim().toLowerCase(),
   });
   if (error) throw new Error(friendlyAuthError(error.message));
 }
@@ -133,7 +149,15 @@ function friendlyAuthError(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("invalid login credentials")) return "Wrong email or password.";
   if (m.includes("email not confirmed")) return "Check your email and confirm the account first.";
-  if (m.includes("already registered")) return "That email already has an account.";
+  if (
+    m.includes("already registered") ||
+    m.includes("already exists") ||
+    m.includes("user_already_exists") ||
+    m.includes("email address is already registered") ||
+    m.includes("user with this email already exists")
+  ) {
+    return "This email is already registered. Please sign in instead.";
+  }
   if (m.includes("failed to fetch") || m.includes("network")) {
     return "No internet. The first sign-in on a phone needs a connection.";
   }

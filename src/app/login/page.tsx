@@ -1,19 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "@/lib/auth";
 import { useSession } from "@/components/session-provider";
 import { Button, Field, Input, Notice, PasswordInput, Spinner } from "@/components/ui";
 
-export default function LoginPage() {
-  const [email, setEmail] = useState("");
+function LoginForm() {
+  const searchParams = useSearchParams();
+  const emailParam = searchParams.get("email") ?? "";
+  const [email, setEmail] = useState(emailParam);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { refresh } = useSession();
+
+  useEffect(() => {
+    if (emailParam && !email) {
+      setEmail(emailParam);
+    }
+  }, [emailParam, email]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -75,3 +83,16 @@ export default function LoginPage() {
     </div>
   );
 }
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="mx-auto flex min-h-dvh w-full max-w-md items-center justify-center p-5">
+        <Spinner />
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
+  );
+}
+

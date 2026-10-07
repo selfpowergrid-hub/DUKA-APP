@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useState, type ReactNode } from "react";
 import { SyncIndicator } from "./sync-indicator";
 import { useSession } from "./session-provider";
+import { signOut } from "@/lib/auth";
 
 /**
  * Two layouts, one breakpoint.
@@ -32,7 +33,21 @@ function isActive(pathname: string, href: string) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { session } = useSession();
+  const router = useRouter();
+  const { session, refresh } = useSession();
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      await signOut();
+      await refresh();
+      router.replace("/login");
+    } catch (err) {
+      setSigningOut(false);
+      alert(err instanceof Error ? err.message : "Could not sign out");
+    }
+  }
 
   return (
     <div className="min-h-dvh bg-canvas">
@@ -68,23 +83,40 @@ export function AppShell({ children }: { children: ReactNode }) {
           </ul>
         </nav>
 
-        <div className="border-t border-line px-3 py-2">
+        <div className="border-t border-line px-3 py-3 flex flex-col gap-2">
           <SyncIndicator />
           {/* Help is deliberately here rather than in the tab list: it is not
               a place you go to work, it is a place you go when stuck, and it
               must not cost the till a tab. */}
           <Link
             href="/help"
-            className="flex min-h-12 items-center px-3 text-sm text-muted hover:text-ink"
+            className="flex min-h-10 items-center px-3 text-sm text-muted hover:text-ink"
           >
             Help
           </Link>
-          <Link
-            href="/settings"
-            className="flex min-h-12 items-center px-3 text-sm text-muted hover:text-ink"
-          >
-            {session?.full_name ?? session?.email} · {session?.role}
-          </Link>
+
+          <div className="mt-1 flex items-center justify-between rounded-xl border border-line bg-surface p-2.5">
+            <Link
+              href="/settings"
+              className="flex min-w-0 flex-1 flex-col justify-center text-xs text-muted hover:text-ink"
+              title="View settings"
+            >
+              <span className="truncate font-semibold text-ink text-sm">
+                {session?.full_name ?? session?.email}
+              </span>
+              <span className="capitalize text-muted">{session?.role}</span>
+            </Link>
+
+            <button
+              type="button"
+              onClick={handleSignOut}
+              disabled={signingOut}
+              className="ml-2 flex min-h-9 items-center justify-center rounded-lg bg-danger-soft px-2.5 text-xs font-semibold text-danger transition-colors hover:bg-danger hover:text-white disabled:opacity-50 shrink-0"
+              title="Sign out of account"
+            >
+              {signingOut ? "..." : "Sign out"}
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -98,15 +130,23 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {session?.shop_name ?? "Duka Lite"}
               </span>
             </Link>
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-2">
               <Link
                 href="/help"
                 aria-label="Help"
-                className="flex h-12 w-12 items-center justify-center rounded-full text-lg font-bold text-muted"
+                className="flex h-10 w-10 items-center justify-center rounded-full text-base font-bold text-muted hover:text-ink"
               >
                 ?
               </Link>
               <SyncIndicator />
+              <button
+                type="button"
+                onClick={handleSignOut}
+                disabled={signingOut}
+                className="flex min-h-9 items-center justify-center rounded-lg bg-danger-soft px-2.5 text-xs font-semibold text-danger transition-colors hover:bg-danger hover:text-white disabled:opacity-50"
+              >
+                {signingOut ? "..." : "Sign out"}
+              </button>
             </span>
           </div>
         </header>
@@ -143,3 +183,4 @@ export function AppShell({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
