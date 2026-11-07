@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
-import { inviteAttendant, signOut } from "@/lib/auth";
+import { signOut } from "@/lib/auth";
 import {
   describeEntry,
   describeSyncError,
@@ -18,8 +18,9 @@ import { reminderTemplate, saveReminderTemplate } from "@/lib/store";
 import { DEFAULT_TEMPLATE, shareText, TEMPLATE_TOKENS } from "@/lib/remind";
 import Link from "next/link";
 import { InstallButton } from "@/components/install-button";
+import { StaffManagement } from "@/components/staff-management";
 import { useSession } from "@/components/session-provider";
-import { Button, Field, Input, Notice } from "@/components/ui";
+import { Button, Notice } from "@/components/ui";
 import type { OutboxKind } from "@/lib/types";
 
 const KIND_LABELS: Record<OutboxKind, string> = {
@@ -43,8 +44,6 @@ const KIND_LABELS: Record<OutboxKind, string> = {
 export default function SettingsPage() {
   const { session, refresh } = useSession();
   const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState<number | null>(null);
@@ -59,22 +58,6 @@ export default function SettingsPage() {
   useEffect(() => {
     reminderTemplate().then(setTemplate);
   }, []);
-
-  async function invite(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null);
-    setError(null);
-    try {
-      await inviteAttendant(email, name);
-      setMsg(
-        `${email} can now create an account at the sign-up page and will join this shop as an attendant.`,
-      );
-      setEmail("");
-      setName("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add staff");
-    }
-  }
 
   async function discard(seq: number) {
     setDiscarding(seq);
@@ -143,32 +126,7 @@ export default function SettingsPage() {
         <InstallButton />
       </div>
 
-      {session?.role === "owner" && (
-        <form onSubmit={invite} className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4">
-          <h2 className="text-lg font-bold">Add an attendant</h2>
-          <p className="text-sm text-muted">
-            Invite by email, then have them sign up with that same email. They will join this
-            shop automatically. Needs internet.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Their email">
-              <Input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </Field>
-            <Field label="Their name">
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-          </div>
-          {msg && <Notice tone="cash">{msg}</Notice>}
-          <Button type="submit" className="sm:w-48">
-            Add attendant
-          </Button>
-        </form>
-      )}
+      {session?.role === "owner" && <StaffManagement />}
 
       {/* The reminder message. Kept here rather than on the Debts screen so the
           owner sets it once when they have a minute, not while a customer is
@@ -347,6 +305,7 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {msg && <Notice tone="cash">{msg}</Notice>}
       {error && <Notice>{error}</Notice>}
 
       <Button variant="danger" size="lg" onClick={out} className="sm:w-48">

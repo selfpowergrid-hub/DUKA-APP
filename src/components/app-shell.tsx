@@ -36,6 +36,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { session, refresh } = useSession();
   const [signingOut, setSigningOut] = useState(false);
+  const isOwner = session?.role === "owner";
+
+  const visibleTabs = TABS.filter((t) => {
+    if (t.href === "/reports" && !isOwner) return false;
+    return true;
+  });
 
   async function handleSignOut() {
     setSigningOut(true);
@@ -62,7 +68,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <nav className="flex-1 p-3">
           <ul className="flex flex-col gap-1">
-            {TABS.map((t) => {
+            {visibleTabs.map((t) => {
               const active = isActive(pathname, t.href);
               return (
                 <li key={t.href}>
@@ -158,8 +164,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* ------------------------------------------ mobile/tablet tab bar --- */}
       <nav className="no-print fixed inset-x-0 bottom-0 z-20 mx-auto max-w-3xl border-t border-line bg-surface lg:hidden">
-        <ul className="grid grid-cols-5">
-          {TABS.map((t) => {
+        <ul
+          className="grid"
+          style={{ gridTemplateColumns: `repeat(${visibleTabs.length}, minmax(0, 1fr))` }}
+        >
+          {visibleTabs.map((t) => {
             const active = isActive(pathname, t.href);
             return (
               <li key={t.href}>

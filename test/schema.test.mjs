@@ -35,6 +35,7 @@ const MIGRATIONS = [
   "0012_batches_and_expiry.sql",
   "0013_expenses.sql",
   "0014_dispensing_records.sql",
+  "0015_staff_management.sql",
 ];
 
 const db = new PGlite();
@@ -122,6 +123,30 @@ expect(
   "invited attendant joins the same shop as attendant",
   attProf.role === "attendant" && attProf.shop_id === shop,
 );
+
+// --- staff management roster, invite revocation & removal -----------------
+await as(owner, () => q("select public.create_attendant('pending@duka.ke', 'Wanjiku')"));
+const staffList = (await as(owner, () => q("select * from public.get_shop_staff()"))).rows;
+expect(
+  "owner sees both active and pending staff",
+  staffList.some((s) => s.email === "att@duka.ke" && s.status === "active") &&
+    staffList.some((s) => s.email === "pending@duka.ke" && s.status === "invited"),
+);
+
+await as(owner, () => q("select public.revoke_invite('pending@duka.ke')"));
+const afterRevoke = (await as(owner, () => q("select * from public.get_shop_staff()"))).rows;
+expect(
+  "revoking invite removes it from staff list",
+  !afterRevoke.some((s) => s.email === "pending@duka.ke"),
+);
+
+let attForbiddenStaff = false;
+try {
+  await as(att, () => q("select * from public.get_shop_staff()"));
+} catch {
+  attForbiddenStaff = true;
+}
+expect("attendant cannot view staff roster", attForbiddenStaff);
 
 // --- a second, unrelated shop (for the RLS isolation test) -----------------
 const other = (

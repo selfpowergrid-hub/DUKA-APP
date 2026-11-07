@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "@/lib/auth";
@@ -16,12 +16,6 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { refresh } = useSession();
-
-  useEffect(() => {
-    if (emailParam && !email) {
-      setEmail(emailParam);
-    }
-  }, [emailParam, email]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -72,10 +66,14 @@ function LoginForm() {
         </Button>
       </form>
 
-      <p className="text-sm text-muted">
-        The first sign-in on a phone needs internet. After that the app works with no
-        connection at all.
-      </p>
+      <div className="flex flex-col gap-2 rounded-xl bg-panel p-3.5 text-xs text-muted sm:text-sm">
+        <p className="font-semibold text-ink">
+          Cashiers & Staff:
+        </p>
+        <p>
+          Sign in with the email and password provided by your shop owner. First sign-in requires internet; afterwards, the POS works 100% offline.
+        </p>
+      </div>
 
       <Link href="/signup" className="flex min-h-12 items-center text-base font-semibold underline">
         New shop? Create an owner account

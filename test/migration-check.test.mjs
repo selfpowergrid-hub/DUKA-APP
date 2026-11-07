@@ -34,6 +34,7 @@ const ALL = [
   "0012_batches_and_expiry.sql",
   "0013_expenses.sql",
   "0014_dispensing_records.sql",
+  "0015_staff_management.sql",
 ];
 const CHECK = readFileSync(pjoin(HERE, "..", "supabase", "check_migrations.sql"), "utf8");
 
@@ -65,7 +66,7 @@ const expect = (name, ok, detail = "") => {
 // --- fully migrated: everything must read ok ------------------------------
 const full = await build(ALL);
 const fullRows = (await full.query(CHECK)).rows;
-expect("reports a row per migration", fullRows.length === 17, `got ${fullRows.length}`);
+expect("reports a row per migration", fullRows.length === ALL.length, `got ${fullRows.length}`);
 const notOk = fullRows.filter((r) => r.status !== "ok");
 expect(
   "a fully migrated database reports every migration ok",
@@ -131,7 +132,7 @@ expect(
     "0006_weighted_average_cost,0007a_credit_enum,0007b_customer_debt," +
       "0008_debt_lifecycle,0009a_refund_enums,0009b_refunds," +
       "0010_optional_mpesa_code,0011_product_images,0012_batches_and_expiry," +
-      "0013_expenses,0014_dispensing_records",
+      "0013_expenses,0014_dispensing_records,0015_staff_management",
   missing.join(",") || "(none flagged)",
 );
 

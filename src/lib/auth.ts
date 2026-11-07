@@ -1,9 +1,9 @@
 "use client";
 
 import { clearLocalData, db, META_KEYS, metaGet, metaSet } from "./db";
-import { supabase } from "./supabase";
+import { ephemeralSupabase, supabase } from "./supabase";
 import { MAX_ATTEMPTS, pullAll } from "./sync";
-import type { Session, UserRole } from "./types";
+import type { Session, StaffMember, UserRole } from "./types";
 
 /**
  * Auth, offline-first.
@@ -45,7 +45,7 @@ export async function signUpOwner(args: {
   password: string;
   shopName: string;
   fullName: string;
-}): Promise<void> {
+}): Promise<Session> {
   const sb = supabase();
   const emailClean = args.email.trim().toLowerCase();
   const { data, error } = await sb.auth.signUp({
@@ -62,6 +62,17 @@ export async function signUpOwner(args: {
   if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
     throw new Error("This email is already registered. Please sign in instead.");
   }
+
+  // If a session was returned directly, save and return it immediately
+  if (data.user && data.session) {
+    const session = await loadProfile(data.user.id, data.user.email ?? emailClean);
+    await metaSet(META_KEYS.session, session);
+    await pullAll(session);
+    return session;
+  }
+
+  // Otherwise, automatically log in with the credentials without requiring email confirmation click
+  return await signIn(emailClean, args.password);
 }
 
 export async function resendConfirmationEmail(email: string): Promise<void> {
@@ -143,6 +154,64 @@ export async function inviteAttendant(email: string, fullName: string): Promise<
     p_full_name: fullName.trim() || null,
   });
   if (error) throw new Error(error.message);
+}
+
+/** Owner-only: provision an attendant with a password directly so they can log straight in. */
+export async function createStaffMember(args: {
+  email: string;
+  password: string;
+  fullName: string;
+}): Promise<void> {
+  const emailClean = args.email.trim().toLowerCase();
+  const nameClean = args.fullName.trim();
+
+  // 1. Pre-register the invite in the shop
+  const { error: inviteErr } = await supabase().rpc("create_attendant", {
+    p_email: emailClean,
+    p_full_name: nameClean || null,
+  });
+  if (inviteErr) throw new Error(friendlyAuthError(inviteErr.message));
+
+  // 2. Provision account with password using an ephemeral client so owner stays logged in
+  const ep = ephemeralSupabase();
+  const { data, error: signErr } = await ep.auth.signUp({
+    email: emailClean,
+    password: args.password,
+    options: {
+      data: { full_name: nameClean },
+    },
+  });
+
+  if (signErr) {
+    throw new Error(friendlyAuthError(signErr.message));
+  }
+
+  if (data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error("A user with this email already exists.");
+  }
+}
+
+/** Owner-only: fetch active staff roster and pending invites. */
+export async function fetchShopStaff(): Promise<StaffMember[]> {
+  const { data, error } = await supabase().rpc("get_shop_staff");
+  if (error) throw new Error(friendlyAuthError(error.message));
+  return (data as StaffMember[]) ?? [];
+}
+
+/** Owner-only: remove an attendant from the shop. */
+export async function removeStaffMember(userId: string): Promise<void> {
+  const { error } = await supabase().rpc("remove_attendant", {
+    p_user_id: userId,
+  });
+  if (error) throw new Error(friendlyAuthError(error.message));
+}
+
+/** Owner-only: revoke a pending invitation. */
+export async function revokeStaffInvite(email: string): Promise<void> {
+  const { error } = await supabase().rpc("revoke_invite", {
+    p_email: email.trim().toLowerCase(),
+  });
+  if (error) throw new Error(friendlyAuthError(error.message));
 }
 
 function friendlyAuthError(message: string): string {

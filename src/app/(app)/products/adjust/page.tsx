@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProducts } from "@/hooks/use-products";
+import { useSession } from "@/components/session-provider";
 import { recordAdjustment } from "@/lib/store";
 import { Button, Field, Input, Money, Notice } from "@/components/ui";
 import { qty } from "@/lib/format";
@@ -47,6 +48,8 @@ const REASONS: Array<{
 ];
 
 export default function AdjustStockPage() {
+  const { session } = useSession();
+  const isOwner = session?.role === "owner";
   const products = useProducts();
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -68,6 +71,19 @@ export default function AdjustStockPage() {
 
   // Keep the picked product's stock live — another tab may have sold one.
   const current = picked ? (products ?? []).find((p) => p.id === picked.id) ?? picked : null;
+
+  if (session && !isOwner) {
+    return (
+      <div className="mx-auto w-full max-w-2xl p-4 lg:p-6">
+        <h1 className="text-2xl font-bold">Stock Adjustment</h1>
+        <div className="mt-4">
+          <Notice tone="warn">
+            Only the shop owner can adjust or recount inventory. Cashiers are restricted to making sales and collecting payments.
+          </Notice>
+        </div>
+      </div>
+    );
+  }
 
   const num = Number(value);
   const valid = value !== "" && !Number.isNaN(num) && (reason === "adjustment" ? num >= 0 : num > 0);

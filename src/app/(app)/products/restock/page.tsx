@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProducts } from "@/hooks/use-products";
+import { useSession } from "@/components/session-provider";
 import { recordMovement, saveBatch } from "@/lib/store";
 import { Button, Field, Input, Money, Notice } from "@/components/ui";
 import { qty, todayInNairobi } from "@/lib/format";
@@ -11,6 +12,8 @@ import type { Product } from "@/lib/types";
 type CostMode = "unit" | "total";
 
 export default function RestockPage() {
+  const { session } = useSession();
+  const isOwner = session?.role === "owner";
   const products = useProducts();
   const router = useRouter();
   const [search, setSearch] = useState("");
@@ -37,6 +40,19 @@ export default function RestockPage() {
 
   // Live, so a sale on another device does not leave a stale "currently".
   const current = picked ? (products ?? []).find((p) => p.id === picked.id) ?? picked : null;
+
+  if (session && !isOwner) {
+    return (
+      <div className="mx-auto w-full max-w-2xl p-4 lg:p-6">
+        <h1 className="text-2xl font-bold">Restock</h1>
+        <div className="mt-4">
+          <Notice tone="warn">
+            Only the shop owner can add or restock inventory. Cashiers are restricted to making sales and collecting payments.
+          </Notice>
+        </div>
+      </div>
+    );
+  }
 
   const receivedNum = Number(received) || 0;
 

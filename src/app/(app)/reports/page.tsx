@@ -46,6 +46,19 @@ export default function ReportsPage() {
     [report?.period.from, report?.period.to],
   );
 
+  if (session && session.role !== "owner") {
+    return (
+      <div className="mx-auto w-full max-w-2xl p-4 lg:p-6">
+        <h1 className="text-2xl font-bold">Reports</h1>
+        <div className="mt-4">
+          <Notice tone="warn">
+            Only the shop owner can view trading reports, profit & loss, and margins. Cashiers are restricted to making sales and collecting payments.
+          </Notice>
+        </div>
+      </div>
+    );
+  }
+
   if (!report) return <div className="p-4 text-muted">Loading…</div>;
 
   const { sales, previous, margin, varianceTotal } = report;

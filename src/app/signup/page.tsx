@@ -2,10 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signUpOwner, resendConfirmationEmail } from "@/lib/auth";
+import { useSession } from "@/components/session-provider";
 import { Button, Field, Input, Notice, PasswordInput, Spinner } from "@/components/ui";
 
 export default function SignupPage() {
+  const router = useRouter();
+  const { refresh } = useSession();
   const [shopName, setShopName] = useState("");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -28,9 +32,15 @@ export default function SignupPage() {
     setError(null);
     try {
       await signUpOwner({ email, password, shopName, fullName });
-      setDone(true);
+      await refresh();
+      router.replace("/sell");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create the account");
+      const msg = err instanceof Error ? err.message : "Could not create the account";
+      if (msg.toLowerCase().includes("confirm")) {
+        setDone(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }

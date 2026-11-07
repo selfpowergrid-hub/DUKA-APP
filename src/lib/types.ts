@@ -29,6 +29,15 @@ export type MovementReason =
   | "return";
 export type UserRole = "owner" | "attendant";
 
+export interface StaffMember {
+  user_id: string | null;
+  email: string;
+  full_name: string | null;
+  role: UserRole;
+  created_at: string;
+  status: "active" | "invited";
+}
+
 /** The reasons a human can pick on the adjustment screen. */
 export type AdjustmentReason = "adjustment" | "damage" | "loss";
 

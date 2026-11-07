@@ -473,7 +473,18 @@ export default function SellPage() {
         {stage === "cart" && (
           <div className={lines.length ? "px-4 lg:px-0" : "hidden lg:block"}>
             <div className="rounded-2xl border border-line bg-surface p-3 shadow-sm lg:p-4 lg:shadow-md">
-              <h2 className="mb-2 hidden text-lg font-bold lg:block">Current sale</h2>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="hidden text-lg font-bold lg:block">Current sale</h2>
+                {lines.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setLines([])}
+                    className="text-xs font-semibold text-danger hover:underline ml-auto"
+                  >
+                    Clear cart
+                  </button>
+                )}
+              </div>
 
               {lines.length === 0 ? (
                 <p className="py-10 text-center text-muted">Tap a product to start a sale.</p>
@@ -908,12 +919,21 @@ export default function SellPage() {
               />
             </label>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button
+                key="exact"
+                type="button"
+                onClick={() => setTendered(String(total))}
+                className="tabular min-h-14 rounded-xl border-2 border-cash bg-cash-soft text-cash-dark font-bold text-base"
+              >
+                Exact ({money(total)})
+              </button>
               {quickTenders(total).map((v) => (
                 <button
                   key={v}
+                  type="button"
                   onClick={() => setTendered(String(v))}
-                  className="tabular min-h-14 rounded-xl border border-line bg-surface text-lg font-semibold lg:text-base"
+                  className="tabular min-h-14 rounded-xl border border-line bg-surface text-lg font-semibold lg:text-base hover:border-cash"
                 >
                   {money(v)}
                 </button>

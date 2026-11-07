@@ -156,6 +156,18 @@ with checks as (
   union all
   select '0014_dispensing_records', 'prescription-only dispensing register',
          to_regclass('public.dispensing_records') is not null
+
+  union all
+  select '0015_staff_management', 'staff roster, revocation, auto-confirm',
+         exists (select 1 from pg_proc p
+                   join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='get_shop_staff')
+     and exists (select 1 from pg_proc p
+                   join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='revoke_invite')
+     and exists (select 1 from pg_proc p
+                   join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='remove_attendant')
 )
 
 select

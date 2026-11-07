@@ -52,17 +52,21 @@ export default function ProductsPage() {
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-2 md:order-1 md:flex md:shrink-0 md:gap-3">
-          <Link href="/products/restock" className="md:w-32">
-            <Button variant="neutral" className="w-full">
-              Restock
-            </Button>
-          </Link>
-          <Link href="/products/adjust" className="md:w-32">
-            <Button variant="neutral" className="w-full">
-              Adjust
-            </Button>
-          </Link>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 md:order-1 md:flex md:shrink-0 md:gap-3">
+          {isOwner && (
+            <Link href="/products/restock" className="md:w-32">
+              <Button variant="neutral" className="w-full">
+                Restock
+              </Button>
+            </Link>
+          )}
+          {isOwner && (
+            <Link href="/products/adjust" className="md:w-32">
+              <Button variant="neutral" className="w-full">
+                Adjust
+              </Button>
+            </Link>
+          )}
           <Link href="/products/low-stock" className="md:w-40">
             <Button variant={lowCount ? "danger" : "neutral"} className="w-full">
               Low{lowCount ? ` · ${lowCount}` : " stock"}
