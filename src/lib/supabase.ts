@@ -50,6 +50,7 @@ export function ephemeralSupabase(): SupabaseClient {
   }
   return createClient(url, key, {
     auth: {
+      storageKey: "ephemeral-auth-session",
       persistSession: false,
       autoRefreshToken: false,
       detectSessionInUrl: false,
